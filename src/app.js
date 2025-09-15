@@ -10,6 +10,9 @@ import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
 import staffRoutes from "./routes/staff.js";
 import shiftRoutes from "./routes/shifts.js";
+import attendanceRoutes from "./routes/attendance.js";
+import { startQrRotateJob } from "./jobs/qrRotateJob.js";
+
 
 const app = express();
 
@@ -30,12 +33,15 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+startQrRotateJob(process.env.QR_TTL_MINUTES ? Number(process.env.QR_TTL_MINUTES) : 3);
+
 app.get("/", (req, res) => res.json({ ok: true }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/shifts", shiftRoutes);
+app.use("/api/attendance", attendanceRoutes); // if you have attendance routes
 
 // 404
 app.use((req, res, next) => next(createError(404, "Not Found")));

@@ -1,10 +1,19 @@
 // src/middleware/auth.js
 import jwt from "jsonwebtoken";
 
+const ACCESS_TOKEN_COOKIE = process.env.COOKIE_NAME || "rt";
+
 export function auth(required = true) {
   return (req, res, next) => {
+    // 1️⃣ Try header first
     const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1];
+    let token = authHeader && authHeader.split(" ")[1];
+
+    // 2️⃣ Fallback to cookie
+    if (!token && req.cookies) {
+      token = req.cookies[ACCESS_TOKEN_COOKIE];
+    }
+
     if (!token) {
       if (required) {
         return res.status(401).json({ error: "Missing access token" });
