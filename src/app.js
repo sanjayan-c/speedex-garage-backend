@@ -11,6 +11,7 @@ import userRoutes from "./routes/users.js";
 import staffRoutes from "./routes/staff.js";
 import shiftRoutes from "./routes/shifts.js";
 import attendanceRoutes from "./routes/attendance.js";
+import leave from "./routes/leave.js";
 import { startQrRotateJob } from "./jobs/qrRotateJob.js";
 
 
@@ -41,8 +42,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/shifts", shiftRoutes);
-app.use("/api/attendance", attendanceRoutes); // if you have attendance routes
-
+app.use("/api/attendance", attendanceRoutes); 
+app.use("/api/leave", leave); 
 // 404
 app.use((req, res, next) => next(createError(404, "Not Found")));
 
