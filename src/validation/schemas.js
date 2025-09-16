@@ -1,4 +1,5 @@
 import Joi from "joi";
+const timeString = Joi.string().pattern(/^\d{2}:\d{2}(:\d{2})?$/);
 
 const registerSchema = Joi.object({
   username: Joi.string().min(3).max(64).required(),
@@ -35,6 +36,8 @@ const staffCreateSchema = Joi.object({
   email: Joi.string().email().required(),
   contactNo: Joi.string().max(30).required(),
   emergencyContactNo: Joi.string().max(30).required(),
+  shiftStart: timeString.required(),
+  shiftEnd:   timeString.required(),
 });
 
 const staffUpdateSchema = Joi.object({
@@ -43,6 +46,8 @@ const staffUpdateSchema = Joi.object({
   email: Joi.string().email().optional(),
   contactNo: Joi.string().max(30).optional(),
   emergencyContactNo: Joi.string().max(30).optional(),
+  shiftStart: timeString.optional(),
+  shiftEnd:   timeString.optional(),
 }).min(1);
 
 const shiftUpdateSchema = Joi.object({

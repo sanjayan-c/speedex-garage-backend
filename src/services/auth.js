@@ -78,18 +78,44 @@ async function login(req, res) {
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
-    // --- Shift window check (Toronto) ---
-    let untimeToSet = null;
+    // --- Figure out the shift window (prefer per-staff allocated shift) ---
+    let shift = null;
     try {
-      const { rows: shiftRows } = await pool.query(
-        "SELECT start_local_time, end_local_time FROM shift_hours WHERE id=1"
+      // 1) Try staff-specific shift first
+      const { rows: staffRows } = await pool.query(
+        `SELECT
+           shift_start_local_time::text AS start_local_time,
+           shift_end_local_time::text   AS end_local_time
+         FROM staff
+         WHERE user_id=$1`,
+        [user.id]
       );
-      if (shiftRows.length) {
-        const shift = shiftRows[0];
+
+      if (
+        staffRows.length &&
+        staffRows[0].start_local_time &&
+        staffRows[0].end_local_time
+      ) {
+        shift = staffRows[0]; // use allocated staff shift
+      } else {
+        // 2) Fallback to global shift (optional; comment out if you want staff-only enforcement)
+        const { rows: shiftRows } = await pool.query(
+          "SELECT start_local_time::text AS start_local_time, end_local_time::text AS end_local_time FROM shift_hours WHERE id=1"
+        );
+        if (shiftRows.length) shift = shiftRows[0];
+      }
+    } catch (e) {
+      console.error("Shift lookup failed:", e);
+      // Non-fatal; if shift is null we skip untime logic
+    }
+
+    // --- Shift window check (Toronto) using 30-min early/late buffer ---
+    if (user.role === "staff" && shift) {
+      try {
+        // buildShiftWindowToronto already applies: start-30min → end+30min
         const { windowStart, windowEnd } = buildShiftWindowToronto(shift);
         const nowTor = nowToronto();
 
-        // ✅ log current Toronto time and window
         console.log("Current Toronto time:", nowTor.toISO());
         console.log(
           "Allowed window:",
@@ -99,26 +125,29 @@ async function login(req, res) {
         );
 
         if (!isInWindow(nowTor, windowStart, windowEnd)) {
-          untimeToSet = {
-            startTime: nowTor.toISO(),
-            active: true,
-            durationMinutes: 10,
-          };
-          await pool.query("UPDATE users SET untime=$1 WHERE id=$2", [
-            JSON.stringify(untimeToSet),
-            user.id,
-          ]);
+          // Staff outside allocated (buffered) window:
+          // set only { active: true } and mark unapproved. Admin will start/approve later.
+          const untimeInitial = { active: true };
+
+          await pool.query(
+            "UPDATE users SET untime=$1, untime_approved=false WHERE id=$2",
+            [JSON.stringify(untimeInitial), user.id]
+          );
+
+          console.warn(
+            `[ALERT MOCK] Staff out-of-window login: ${user.username} (${user.id}) — awaiting admin start`
+          );
         } else {
-          // Optional: clear old untime if login is valid
-          // await pool.query("UPDATE users SET untime=NULL WHERE id=$1", [user.id]);
+          // Optional: clear stale UnTime if they login within window
+          // await pool.query("UPDATE users SET untime=NULL, untime_approved=false WHERE id=$1", [user.id]);
         }
+      } catch (e) {
+        console.error("Shift window check failed:", e);
+        // Non-fatal
       }
-    } catch (e) {
-      console.error("Shift window check failed:", e);
-      // Non-fatal: continue login anyway
     }
 
-    // Create tokens
+    // --- Issue tokens & mark logged in ---
     const accessToken = signAccessToken({
       sub: user.id,
       username: user.username,
@@ -130,9 +159,9 @@ async function login(req, res) {
       role: user.role,
     });
 
-    // Store hashed refresh token and mark login
     const bcryptHash = await bcrypt.hash(refreshToken, 12);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
     await pool.query(
       "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1,$2,$3)",
       [user.id, bcryptHash, expiresAt.toISOString()]
@@ -143,7 +172,7 @@ async function login(req, res) {
     res.json({
       accessToken,
       user: { id: user.id, username: user.username, role: user.role },
-      untime: untimeToSet, // optionally return this so frontend knows
+      // no untime details returned here because we only set {active:true}
     });
   } catch (err) {
     console.error(err);
@@ -213,15 +242,26 @@ async function logout(req, res) {
   const token = req.cookies[COOKIE_NAME];
   if (token) {
     try {
-      const payload = verifyRefreshToken(token);
+      const payload = verifyRefreshToken(token); // { sub, ... }
+      // revoke only this user's refresh tokens
       await pool.query(
         "UPDATE refresh_tokens SET revoked=true WHERE user_id=$1",
+        [payload.sub]
+      );
+      // mark the user as logged out
+      await pool.query("UPDATE users SET is_login=false WHERE id=$1", [
+        payload.sub,
+      ]);
+      // mark untime as null
+      await pool.query(
+        "UPDATE users SET untime=NULL, untime_approved=false WHERE id=$1",
         [payload.sub]
       );
     } catch (e) {
       // ignore parse errors on logout
     }
   }
+  // clear the cookie either way
   res.clearCookie(COOKIE_NAME, { path: "/api/auth/refresh" });
   res.json({ ok: true });
 }

@@ -10,6 +10,7 @@ import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
 import staffRoutes from "./routes/staff.js";
 import shiftRoutes from "./routes/shifts.js";
+import untimeRoutes from "./routes/untime.js";
 
 const app = express();
 
@@ -36,6 +37,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/shifts", shiftRoutes);
+app.use("/api/untime", untimeRoutes);
 
 // 404
 app.use((req, res, next) => next(createError(404, "Not Found")));
