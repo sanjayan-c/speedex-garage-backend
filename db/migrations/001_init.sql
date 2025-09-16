@@ -47,3 +47,12 @@ CREATE TABLE IF NOT EXISTS leave_requests (
 
 CREATE INDEX IF NOT EXISTS idx_leave_staff ON leave_requests(staff_id);
 
+ALTER TABLE leave_requests
+  ADD COLUMN leave_type TEXT NOT NULL DEFAULT 'full_day' CHECK (leave_type IN ('full_day','half_day')),
+  ADD COLUMN half_type TEXT CHECK (half_type IN ('first_half','second_half'));
+
+ALTER TABLE leave_requests
+  ALTER COLUMN start_date TYPE TIMESTAMPTZ USING start_date::timestamptz,
+  ALTER COLUMN end_date TYPE TIMESTAMPTZ USING end_date::timestamptz;
+
+
