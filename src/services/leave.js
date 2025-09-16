@@ -195,4 +195,78 @@ async function editLeave(req, res) {
 }
 
 
-export { requestLeave, listLeave, updateLeaveStatus, listMyLeave, editLeave };
+import { DateTime } from "luxon";
+import { pool } from "../utils/db.js";
+
+// 1️⃣ GET /api/leave/staff/:staffId (get leave by staff)
+async function getLeaveByStaff(req, res) {
+  const { staffId } = req.params;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM leave_requests WHERE staff_id=$1 ORDER BY created_at DESC`,
+      [staffId]
+    );
+
+    const data = rows.map(r => ({
+      ...r,
+      start_date: DateTime.fromJSDate(r.start_date).setZone("America/Toronto").toISO(),
+      end_date: DateTime.fromJSDate(r.end_date).setZone("America/Toronto").toISO(),
+    }));
+
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch leave by staff" });
+  }
+}
+
+// 2️⃣ DELETE /api/leave/:id (staff delete if pending)
+async function deleteLeaveByStaff(req, res) {
+  const { id } = req.params;
+
+  try {
+    const staffQ = await pool.query("SELECT id FROM staff WHERE user_id=$1", [req.user.sub || req.user.id]);
+    if (!staffQ.rows.length) return res.status(404).json({ error: "Staff record not found" });
+    const staffId = staffQ.rows[0].id;
+
+    const { rows } = await pool.query("SELECT * FROM leave_requests WHERE id=$1 AND staff_id=$2", [id, staffId]);
+    if (!rows.length) return res.status(404).json({ error: "Leave request not found" });
+
+    if (rows[0].status !== "pending") {
+      return res.status(400).json({ error: "Only pending leave can be deleted by staff" });
+    }
+
+    await pool.query("DELETE FROM leave_requests WHERE id=$1 AND staff_id=$2", [id, staffId]);
+    res.json({ ok: true, message: "Leave deleted" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete leave" });
+  }
+}
+
+// 3️⃣ DELETE /api/leave/admin/:id (admin delete if leave day not passed)
+async function deleteLeaveByAdmin(req, res) {
+  const { id } = req.params;
+
+  try {
+    const { rows } = await pool.query("SELECT * FROM leave_requests WHERE id=$1", [id]);
+    if (!rows.length) return res.status(404).json({ error: "Leave request not found" });
+
+    const today = DateTime.now().setZone("America/Toronto").startOf("day");
+    const leaveStart = DateTime.fromJSDate(rows[0].start_date).setZone("America/Toronto").startOf("day");
+
+    if (leaveStart < today) {
+      return res.status(400).json({ error: "Cannot delete leave after it has started" });
+    }
+
+    await pool.query("DELETE FROM leave_requests WHERE id=$1", [id]);
+    res.json({ ok: true, message: "Leave deleted by admin" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete leave" });
+  }
+}
+
+
+export { requestLeave, listLeave, updateLeaveStatus, listMyLeave, editLeave, getLeaveByStaff, deleteLeaveByStaff, deleteLeaveByAdmin };
