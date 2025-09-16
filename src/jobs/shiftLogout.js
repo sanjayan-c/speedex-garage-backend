@@ -1,7 +1,7 @@
 // src/jobs/shiftLogout.js
 import cron from "node-cron";
 import { pool } from "../utils/db.js";
-import { logoutAllStaff } from "../services/shifts.js";
+import { logoutAllStaff } from "../services/auth.js";
 
 /**
  * Read the end_local_time from DB, add 30 minutes, and return { hour, minute }

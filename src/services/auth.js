@@ -6,12 +6,8 @@ import {
   signAccessToken,
   signRefreshToken,
   verifyRefreshToken,
-} from "../utils/jwt.js"; // ← add .js
-import {
-  nowToronto,
-  buildShiftWindowToronto,
-  isInWindow,
-} from "../utils/time.js";
+} from "../utils/jwt.js";
+import { enforceStaffUntimeWindow } from "../services/untime.js";
 
 const COOKIE_NAME = process.env.COOKIE_NAME || "rt";
 
@@ -78,73 +74,33 @@ async function login(req, res) {
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
-    // --- Figure out the shift window (prefer per-staff allocated shift) ---
-    let shift = null;
+    // --- Staff untime enforcement (uses staff’s allocated shift, else global) ---
     try {
-      // 1) Try staff-specific shift first
-      const { rows: staffRows } = await pool.query(
-        `SELECT
-           shift_start_local_time::text AS start_local_time,
-           shift_end_local_time::text   AS end_local_time
-         FROM staff
-         WHERE user_id=$1`,
-        [user.id]
+      const diag = await enforceStaffUntimeWindow(
+        user.id,
+        user.username,
+        user.role
       );
-
-      if (
-        staffRows.length &&
-        staffRows[0].start_local_time &&
-        staffRows[0].end_local_time
-      ) {
-        shift = staffRows[0]; // use allocated staff shift
-      } else {
-        // 2) Fallback to global shift (optional; comment out if you want staff-only enforcement)
-        const { rows: shiftRows } = await pool.query(
-          "SELECT start_local_time::text AS start_local_time, end_local_time::text AS end_local_time FROM shift_hours WHERE id=1"
-        );
-        if (shiftRows.length) shift = shiftRows[0];
+      if (diag && !diag.skipped) {
+        console.log("Current Toronto time:", diag.nowTorontoISO);
+        if (diag.windowStartISO && diag.windowEndISO) {
+          console.log(
+            "Allowed window:",
+            diag.windowStartISO,
+            "→",
+            diag.windowEndISO
+          );
+        }
+        if (diag.reason) {
+          console.log("Untime reason:", diag.reason);
+        }
+        if (diag.ended) {
+          console.warn("Already shift ended for the day");
+        }
       }
     } catch (e) {
-      console.error("Shift lookup failed:", e);
-      // Non-fatal; if shift is null we skip untime logic
-    }
-
-    // --- Shift window check (Toronto) using 30-min early/late buffer ---
-    if (user.role === "staff" && shift) {
-      try {
-        // buildShiftWindowToronto already applies: start-30min → end+30min
-        const { windowStart, windowEnd } = buildShiftWindowToronto(shift);
-        const nowTor = nowToronto();
-
-        console.log("Current Toronto time:", nowTor.toISO());
-        console.log(
-          "Allowed window:",
-          windowStart.toISO(),
-          "→",
-          windowEnd.toISO()
-        );
-
-        if (!isInWindow(nowTor, windowStart, windowEnd)) {
-          // Staff outside allocated (buffered) window:
-          // set only { active: true } and mark unapproved. Admin will start/approve later.
-          const untimeInitial = { active: true };
-
-          await pool.query(
-            "UPDATE users SET untime=$1, untime_approved=false WHERE id=$2",
-            [JSON.stringify(untimeInitial), user.id]
-          );
-
-          console.warn(
-            `[ALERT MOCK] Staff out-of-window login: ${user.username} (${user.id}) — awaiting admin start`
-          );
-        } else {
-          // Optional: clear stale UnTime if they login within window
-          // await pool.query("UPDATE users SET untime=NULL, untime_approved=false WHERE id=$1", [user.id]);
-        }
-      } catch (e) {
-        console.error("Shift window check failed:", e);
-        // Non-fatal
-      }
+      console.error("Untime enforcement failed:", e);
+      // Non-fatal; continue login
     }
 
     // --- Issue tokens & mark logged in ---
@@ -266,4 +222,58 @@ async function logout(req, res) {
   res.json({ ok: true });
 }
 
-export { register, login, refresh, logout };
+async function logoutAllUsers(req, res) {
+  try {
+    const revoke = await pool.query(
+      "UPDATE refresh_tokens SET revoked=true WHERE revoked=false"
+    );
+    const logout = await pool.query(
+      "UPDATE users SET is_login=false, untime=NULL, untime_approved=false WHERE is_login=true"
+    );
+
+    return res.json({
+      ok: true,
+      revokedTokens: revoke.rowCount ?? 0,
+      usersLoggedOut: logout.rowCount ?? 0,
+    });
+  } catch (err) {
+    console.error("Force logout failed:", err);
+    return res.status(500).json({ error: "Force logout failed" });
+  }
+}
+
+async function logoutAllStaff(req, res) {
+  try {
+    const revoke = await pool.query(
+      `UPDATE refresh_tokens
+         SET revoked = true
+         WHERE revoked = false
+           AND user_id IN (SELECT id FROM users WHERE role = 'staff')`
+    );
+    const logout = await pool.query(
+      `UPDATE users
+         SET is_login = false, untime = NULL, untime_approved = false
+         WHERE is_login = true
+           AND role = 'staff'`
+    );
+
+    if (res) {
+      return res.json({
+        ok: true,
+        revokedTokens: revoke.rowCount ?? 0,
+        staffLoggedOut: logout.rowCount ?? 0,
+      });
+    }
+    console.log(
+      `[cron] Staff-only logout — revoked: ${revoke.rowCount ?? 0}, users: ${
+        logout.rowCount ?? 0
+      }`
+    );
+  } catch (err) {
+    console.error("Staff force logout failed:", err);
+    if (res)
+      return res.status(500).json({ error: "Force logout staff failed" });
+  }
+}
+
+export { register, login, refresh, logout, logoutAllUsers, logoutAllStaff };
