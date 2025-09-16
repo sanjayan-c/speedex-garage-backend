@@ -44,3 +44,8 @@ export function buildShiftWindowToronto(shiftRow) {
 export function isInWindow(torontoTime, windowStart, windowEnd) {
   return Interval.fromDateTimes(windowStart, windowEnd).contains(torontoTime);
 }
+
+export function toToronto(utcDate) {
+  if (!utcDate) return null;
+  return DateTime.fromJSDate(utcDate).setZone("America/Toronto").toISO();
+}
