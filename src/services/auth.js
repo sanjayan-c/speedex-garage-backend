@@ -78,33 +78,33 @@ async function login(req, res) {
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
     // --- Staff untime enforcement (uses staff’s allocated shift, else global) ---
-    try {
-      const diag = await enforceStaffUntimeWindow(
-        user.id,
-        user.username,
-        user.role
-      );
-      if (diag && !diag.skipped) {
-        console.log("Current Toronto time:", diag.nowTorontoISO);
-        if (diag.windowStartISO && diag.windowEndISO) {
-          console.log(
-            "Allowed window:",
-            diag.windowStartISO,
-            "→",
-            diag.windowEndISO
-          );
-        }
-        if (diag.reason) {
-          console.log("Untime reason:", diag.reason);
-        }
-        if (diag.ended) {
-          console.warn("Already shift ended for the day");
-        }
-      }
-    } catch (e) {
-      console.error("Untime enforcement failed:", e);
-      // Non-fatal; continue login
-    }
+    // try {
+    //   const diag = await enforceStaffUntimeWindow(
+    //     user.id,
+    //     user.username,
+    //     user.role
+    //   );
+    //   if (diag && !diag.skipped) {
+    //     console.log("Current Toronto time:", diag.nowTorontoISO);
+    //     if (diag.windowStartISO && diag.windowEndISO) {
+    //       console.log(
+    //         "Allowed window:",
+    //         diag.windowStartISO,
+    //         "→",
+    //         diag.windowEndISO
+    //       );
+    //     }
+    //     if (diag.reason) {
+    //       console.log("Untime reason:", diag.reason);
+    //     }
+    //     if (diag.ended) {
+    //       console.warn("Already shift ended for the day");
+    //     }
+    //   }
+    // } catch (e) {
+    //   console.error("Untime enforcement failed:", e);
+    //   // Non-fatal; continue login
+    // }
 
     // --- Issue tokens & mark logged in ---
     const accessToken = signAccessToken({

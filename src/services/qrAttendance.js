@@ -2,6 +2,8 @@ import { v4 as uuidv4 } from "uuid";
 import QRCode from "qrcode";
 import { pool } from "../utils/db.js";
 import { addMinutes } from "date-fns";
+import { enforceStaffUntimeWindow } from "../services/untime.js";
+import { DateTime} from "luxon";
 
 const SESSION_TTL_MINUTES = 3; // rotate every 3 minutes
 
@@ -74,8 +76,54 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
   );
 
   const nowTs = new Date().toISOString();
+  
 
   if (markType === "in") {
+    
+    try {
+  const { rows } = await pool.query(
+    `SELECT 
+       u.id AS user_id,
+       u.username,
+       u.role
+     FROM staff s
+     JOIN users u ON s.user_id = u.id
+     WHERE s.id = $1`,
+    [staffId]
+  );
+
+  if (!rows.length) {
+    return res.status(404).json({ error: "Staff or User not found" });
+  }
+
+    const user = rows[0];
+
+      const diag = await enforceStaffUntimeWindow(
+        user.user_id,
+        user.username,
+        user.role
+      );
+      if (diag && !diag.skipped) {
+        console.log("Current Toronto time:", diag.nowTorontoISO);
+        if (diag.windowStartISO && diag.windowEndISO) {
+          console.log(
+            "Allowed window:",
+            diag.windowStartISO,
+            "→",
+            diag.windowEndISO
+          );
+        }
+        if (diag.reason) {
+          console.log("Untime reason:", diag.reason);
+        }
+        if (diag.ended) {
+          console.warn("Already shift ended for the day");
+        }
+      }
+    } catch (e) {
+      console.error("Untime enforcement failed:", e);
+      // Non-fatal; continue login
+    }
     if (rec.time_in) throw new Error("Already marked IN for today");
     await pool.query(
       "UPDATE attendance_records SET time_in=$1 WHERE staff_id=$2 AND attendance_date=$3",
