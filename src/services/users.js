@@ -21,10 +21,7 @@ async function updateRole(req, res) {
 
 // PATCH /api/users/password  (self or admin)
 async function updatePassword(req, res) {
-  // Body already validated by validate(passwordUpdateSchema)
   const { currentPassword, newPassword } = req.body;
-
-  // Acting user (from access token payload)
   const actingUser = req.user; // { sub, role }
   const targetUserId = req.query.userId || actingUser.sub;
 
@@ -33,10 +30,17 @@ async function updatePassword(req, res) {
   if (!isSelf && !isAdmin) return res.status(403).json({ error: "Forbidden" });
 
   try {
-    // If self, require currentPassword to be provided & correct
+    // Self-change must supply current password
     if (isSelf && !currentPassword) {
       return res.status(400).json({
         error: "currentPassword is required when changing your own password",
+      });
+    }
+
+    // If admin is resetting another user's password, do NOT accept currentPassword (avoid confusion)
+    if (!isSelf && isAdmin && currentPassword) {
+      return res.status(400).json({
+        error: "Do not provide currentPassword when resetting another user's password",
       });
     }
 
@@ -46,10 +50,22 @@ async function updatePassword(req, res) {
     );
     if (!rows.length) return res.status(404).json({ error: "User not found" });
 
+    const storedHash = rows[0].password_hash;
+
+    // Verify current password for self
     if (isSelf) {
-      const ok = await bcrypt.compare(currentPassword, rows[0].password_hash);
-      if (!ok)
+      const ok = await bcrypt.compare(currentPassword, storedHash);
+      if (!ok) {
         return res.status(400).json({ error: "Current password is incorrect" });
+      }
+    }
+
+    // Prevent setting the same password as the current one
+    const sameAsOld = await bcrypt.compare(newPassword, storedHash);
+    if (sameAsOld) {
+      return res.status(400).json({
+        error: "New password must be different from the current password",
+      });
     }
 
     const newHash = await bcrypt.hash(newPassword, 12);
@@ -64,5 +80,6 @@ async function updatePassword(req, res) {
     res.status(500).json({ error: "Failed to update password" });
   }
 }
+
 
 export { updateRole, updatePassword };

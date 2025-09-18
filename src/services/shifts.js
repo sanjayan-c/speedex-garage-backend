@@ -1,69 +1,53 @@
 // src/services/shifts.js
 import { pool } from "../utils/db.js";
 import { rescheduleShiftLogout } from "../jobs/shiftLogout.js";
+import { isStaffWindowInsideGlobal } from "../services/staff.js";
 
 /* ---------------- helpers for time-window checks ---------------- */
 
+// Regex for "HH:mm" or "HH:mm:ss"
 const timeRe = /^\d{2}:\d{2}(:\d{2})?$/;
 
+// Convert "HH:mm(:ss)" string to total minutes (0..1439)
 function toMinutes(t) {
-  // t: "HH:mm" or "HH:mm:ss"
   const [h, m] = t.split(":").map(Number);
   return h * 60 + (m ?? 0);
 }
 
-/**
- * Staff window [sStart,sEnd] must be fully inside global [gStart,gEnd].
- * All inputs are minutes [0..1439]. Supports overnight global windows.
- *
- * - If global is normal (gEnd >= gStart):
- *     require gStart <= sStart < sEnd <= gEnd
- * - If global crosses midnight (gEnd < gStart), allowed minutes are:
- *     [gStart, 1440) U [0, gEnd]
- *   Staff window itself cannot cross midnight; it must be entirely inside
- *   either the late segment or the early segment.
- */
-function isStaffWindowInsideGlobal(gStartMin, gEndMin, sStartMin, sEndMin) {
-  if (sStartMin >= sEndMin) return false; // disallow staff windows that wrap over midnight
-
-  if (gEndMin >= gStartMin) {
-    // normal daytime window
-    return sStartMin >= gStartMin && sEndMin <= gEndMin;
+// Read current global shift hours (exact, no margin). Returns { start, end, updatedAt } as "HH:MM:SS".
+async function readGlobalShiftTime() {
+  const { rows } = await pool.query(
+    `SELECT
+       start_local_time::text AS start_local_time,
+       end_local_time::text   AS end_local_time,
+       updated_at
+     FROM shift_hours
+     WHERE id=1`
+  );
+  if (!rows.length) {
+    throw new Error("Shift hours not configured");
   }
-
-  // overnight global window
-  const inLateSegment = sStartMin >= gStartMin && sEndMin <= 1440;
-  const inEarlySegment = sStartMin >= 0 && sEndMin <= gEndMin;
-  return inLateSegment || inEarlySegment;
+  const { start_local_time, end_local_time, updated_at } = rows[0];
+  return { start: start_local_time, end: end_local_time, updatedAt: updated_at };
 }
 
 /* ---------------- routes ---------------- */
 
+// GET /api/shifts — return current global shift hours (exact times, no margin)
 async function getShift(req, res) {
   try {
-    const { rows } = await pool.query(
-      `SELECT
-         start_local_time::text AS start_local_time,
-         end_local_time::text   AS end_local_time,
-         updated_at
-       FROM shift_hours
-       WHERE id=1`
-    );
-    if (!rows.length) {
+    const { start, end, updatedAt } = await readGlobalShiftTime();
+    res.json({ start, end, updatedAt });
+  } catch (e) {
+    if (e.message === "Shift hours not configured") {
       return res.status(404).json({ error: "Shift hours not configured" });
     }
-    const r = rows[0];
-    res.json({
-      start: r.start_local_time, // "HH:MM:SS"
-      end: r.end_local_time, // "HH:MM:SS"
-      updatedAt: r.updated_at,
-    });
-  } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Failed to fetch shift hours" });
   }
 }
 
+// PUT /api/shifts — update global hours after checking ALL staff shifts (no margin)
 async function updateShift(req, res) {
   const { start, end } = req.body || {};
   if (!timeRe.test(start) || !timeRe.test(end)) {
@@ -141,4 +125,4 @@ async function updateShift(req, res) {
   }
 }
 
-export { getShift, updateShift };
+export { getShift, updateShift, readGlobalShiftTime };

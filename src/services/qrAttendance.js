@@ -5,7 +5,10 @@ import { addMinutes } from "date-fns";
 
 const SESSION_TTL_MINUTES = 3; // rotate every 3 minutes
 
-export async function createNewQrSession(createdBy = null, ttlMinutes = SESSION_TTL_MINUTES) {
+export async function createNewQrSession(
+  createdBy = null,
+  ttlMinutes = SESSION_TTL_MINUTES
+) {
   const sessionCode = uuidv4();
   const now = new Date();
   const expiresAt = addMinutes(now, ttlMinutes).toISOString(); // UTC ISO
@@ -22,7 +25,9 @@ export async function createNewQrSession(createdBy = null, ttlMinutes = SESSION_
 }
 
 export async function getActiveSession() {
-  await pool.query("UPDATE qr_sessions SET active=false WHERE active=true AND expires_at < NOW()");
+  await pool.query(
+    "UPDATE qr_sessions SET active=false WHERE active=true AND expires_at < NOW()"
+  );
   const { rows } = await pool.query(
     "SELECT id, session_code, created_by, created_at, expires_at FROM qr_sessions WHERE active=true ORDER BY created_at DESC LIMIT 1"
   );
@@ -43,11 +48,14 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
 
   const session = srows[0];
   if (!session.active || new Date(session.expires_at) < new Date()) {
-    await pool.query("UPDATE qr_sessions SET active=false WHERE id=$1", [session.id]);
+    await pool.query("UPDATE qr_sessions SET active=false WHERE id=$1", [
+      session.id,
+    ]);
     throw new Error("Session expired");
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  // const today = new Date().toISOString().slice(0, 10);
+  const today = DateTime.now().setZone("America/Toronto").toISODate();
 
   // ensure row exists
   await pool.query(
@@ -58,7 +66,9 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
   );
 
   // fetch existing record
-  const { rows: [rec] } = await pool.query(
+  const {
+    rows: [rec],
+  } = await pool.query(
     "SELECT * FROM attendance_records WHERE staff_id=$1 AND attendance_date=$2",
     [staffId, today]
   );
@@ -79,15 +89,18 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
       [nowTs, staffId, today]
     );
   } else if (markType === "overtime-in") {
-    if (rec.overtime_in) throw new Error("Already marked OVERTIME IN for today");
+    if (rec.overtime_in)
+      throw new Error("Already marked OVERTIME IN for today");
     if (!rec.time_out) throw new Error("Overtime IN only after OUT");
     await pool.query(
       "UPDATE attendance_records SET overtime_in=$1 WHERE staff_id=$2 AND attendance_date=$3",
       [nowTs, staffId, today]
     );
   } else if (markType === "overtime-out") {
-    if (rec.overtime_out) throw new Error("Already marked OVERTIME OUT for today");
-    if (!rec.overtime_in) throw new Error("Cannot mark OVERTIME OUT before OVERTIME IN");
+    if (rec.overtime_out)
+      throw new Error("Already marked OVERTIME OUT for today");
+    if (!rec.overtime_in)
+      throw new Error("Cannot mark OVERTIME OUT before OVERTIME IN");
     await pool.query(
       "UPDATE attendance_records SET overtime_out=$1 WHERE staff_id=$2 AND attendance_date=$3",
       [nowTs, staffId, today]
@@ -96,7 +109,9 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
     throw new Error("Unknown mark type");
   }
 
-  const { rows: [updated] } = await pool.query(
+  const {
+    rows: [updated],
+  } = await pool.query(
     "SELECT * FROM attendance_records WHERE staff_id=$1 AND attendance_date=$2",
     [staffId, today]
   );

@@ -51,8 +51,12 @@ CREATE TABLE IF NOT EXISTS leave_requests (
 CREATE INDEX IF NOT EXISTS idx_leave_staff ON leave_requests(staff_id);
 
 ALTER TABLE leave_requests
-  ADD COLUMN leave_type TEXT NOT NULL DEFAULT 'full_day' CHECK (leave_type IN ('full_day','half_day')),
-  ADD COLUMN half_type TEXT CHECK (half_type IN ('first_half','second_half'));
+  ADD COLUMN IF NOT EXISTS leave_type TEXT NOT NULL DEFAULT 'full_day'
+    CHECK (leave_type IN ('full_day','half_day'));
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS half_type TEXT
+    CHECK (half_type IN ('first_half','second_half'));
 
 ALTER TABLE leave_requests
   ALTER COLUMN start_date TYPE TIMESTAMPTZ USING start_date::timestamptz,
@@ -64,4 +68,44 @@ ADD COLUMN IF NOT EXISTS shift_end_local_time TIME NULL;
 
 ALTER TABLE users
 ADD COLUMN IF NOT EXISTS untime_approved BOOLEAN NOT NULL DEFAULT false;
+
+-- 1.1 A sequence to generate the numeric part of EmployeeID
+CREATE SEQUENCE IF NOT EXISTS staff_employee_seq START 1001; -- pick your start
+
+-- 1.2 Add new columns
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS employee_id TEXT UNIQUE
+    DEFAULT ('SDX-' || nextval('staff_employee_seq')::text),
+  ADD COLUMN IF NOT EXISTS birthday DATE,
+  ADD COLUMN IF NOT EXISTS joining_date DATE,
+  ADD COLUMN IF NOT EXISTS leave_balance NUMERIC(10,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS position TEXT,
+  ADD COLUMN IF NOT EXISTS manager_id UUID NULL REFERENCES staff (id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS job_family TEXT;
+
+-- 1.3 Enforce format of employee_id
+ALTER TABLE staff
+  ADD CONSTRAINT staff_employee_id_format_chk
+  CHECK (employee_id ~ '^SDX-[0-9]+$');
+
+-- 1.4 Prevent self-managing
+ALTER TABLE staff
+  ADD CONSTRAINT staff_manager_not_self_chk
+  CHECK (manager_id IS NULL OR manager_id <> id);
+
+-- 1.5 Make employee_id immutable (reject updates if changed)
+CREATE OR REPLACE FUNCTION prevent_employee_id_update()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.employee_id IS DISTINCT FROM OLD.employee_id THEN
+    RAISE EXCEPTION 'employee_id is immutable and cannot be changed';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_staff_employee_id_immutable ON staff;
+CREATE TRIGGER trg_staff_employee_id_immutable
+BEFORE UPDATE ON staff
+FOR EACH ROW EXECUTE FUNCTION prevent_employee_id_update();
 

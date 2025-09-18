@@ -13,6 +13,7 @@ app.listen(PORT, async () => {
 
     // Schedule the daily logout at shift end + 30 minutes (Toronto)
     await scheduleShiftLogout();
+    // Check and log out untime users
     scheduleUntimeEnforcer();  
   } catch (err) {
     console.error("DB connection failed:", err);

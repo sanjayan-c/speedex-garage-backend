@@ -13,7 +13,7 @@ import {
 
 const router = express.Router();
 
-// Create
+// Create a new staff member (admin only)
 router.post(
   "/",
   auth(true),
@@ -22,13 +22,13 @@ router.post(
   createStaff
 );
 
-// List
+// List all staff (admin only)
 router.get("/", auth(true), requireRole("admin"), listStaff);
 
-// Get by ID
+// Get one staff record by id (admin only)
 router.get("/:id", auth(true), requireRole("admin"), getStaffById);
 
-// Update
+// Update a staff record (admin only)
 router.patch(
   "/:id",
   auth(true),
@@ -37,7 +37,7 @@ router.patch(
   updateStaff
 );
 
-// Delete
+// Delete a staff record (admin only)
 router.delete("/:id", auth(true), requireRole("admin"), deleteStaff);
 
 export default router;

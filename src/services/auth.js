@@ -8,16 +8,19 @@ import {
   verifyRefreshToken,
 } from "../utils/jwt.js";
 import { enforceStaffUntimeWindow } from "../services/untime.js";
+import { assertStaffShiftWithinGlobal } from "../services/staff.js";
 
 const COOKIE_NAME = process.env.COOKIE_NAME || "rt";
+const COOKIE_PATH = process.env.COOKIE_PATH || "/api/auth";
 
 function setRefreshCookie(res, token) {
   const isProd = process.env.NODE_ENV === "production";
+
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
-    path: "/api/auth/refresh",
+    path: COOKIE_PATH,
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 }
@@ -218,10 +221,11 @@ async function logout(req, res) {
     }
   }
   // clear the cookie either way
-  res.clearCookie(COOKIE_NAME, { path: "/api/auth/refresh" });
+  res.clearCookie(COOKIE_NAME, { path: COOKIE_PATH });
   res.json({ ok: true });
 }
 
+// POST /api/auth/force-logout (Admin Only)
 async function logoutAllUsers(req, res) {
   try {
     const revoke = await pool.query(
@@ -242,6 +246,7 @@ async function logoutAllUsers(req, res) {
   }
 }
 
+// POST /api/auth/force-logout-staff (Admin Only)
 async function logoutAllStaff(req, res) {
   try {
     const revoke = await pool.query(
@@ -276,4 +281,135 @@ async function logoutAllStaff(req, res) {
   }
 }
 
-export { register, login, refresh, logout, logoutAllUsers, logoutAllStaff };
+// POST /api/auth/register-staff (Admin Only)
+async function registerStaffAdmin(req, res) {
+  const {
+    username,
+    password,
+    isLogin,
+    untime,
+    createdBy,
+    firstName,
+    lastName,
+    email,
+    contactNo,
+    emergencyContactNo,
+    shiftStart,
+    shiftEnd,
+
+    // NEW:
+    birthday,
+    joiningDate,
+    leaveBalance,
+    position,
+    managerId,
+    jobFamily,
+  } = req.body;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const existing = await client.query("SELECT 1 FROM users WHERE username=$1", [username]);
+    if (existing.rowCount) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Username already exists" });
+    }
+
+    await assertStaffShiftWithinGlobal(shiftStart, shiftEnd);
+
+    if (managerId) {
+      const r = await client.query("SELECT 1 FROM staff WHERE id=$1", [managerId]);
+      if (!r.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "managerId must be an existing staff id" });
+      }
+    }
+
+    const userId = uuidv4();
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    await client.query(
+      `INSERT INTO users
+        (id, username, password_hash, role, is_login, untime, created_by)
+       VALUES ($1,$2,$3,'staff',$4,$5,$6)`,
+      [
+        userId,
+        username,
+        passwordHash,
+        isLogin ?? false,
+        untime ? JSON.stringify(untime) : null,
+        createdBy || null,
+      ]
+    );
+
+    const staffId = uuidv4();
+    const { rows } = await client.query(
+      `INSERT INTO staff (
+         id, user_id, first_name, last_name, email, contact_no, emergency_contact_no,
+         shift_start_local_time, shift_end_local_time,
+         birthday, joining_date, leave_balance, position, manager_id, job_family
+       )
+       VALUES (
+         $1,$2,$3,$4,$5,$6,$7,
+         $8::time,$9::time,
+         $10::date,$11::date,$12,$13,$14,$15
+       )
+       RETURNING employee_id, birthday, joining_date, leave_balance, position, manager_id, job_family`,
+      [
+        staffId,
+        userId,
+        firstName,
+        lastName,
+        email,
+        contactNo,
+        emergencyContactNo,
+        shiftStart,
+        shiftEnd,
+        birthday ?? null,
+        joiningDate ?? null,
+        leaveBalance ?? 0,
+        position ?? null,
+        managerId ?? null,
+        jobFamily ?? null,
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    const ret = rows[0];
+    return res.status(201).json({
+      user: { id: userId, username, role: "staff" },
+      staff: {
+        id: staffId,
+        userId,
+        employeeId: ret.employee_id,
+        firstName,
+        lastName,
+        email,
+        contactNo,
+        emergencyContactNo,
+        shiftStart,
+        shiftEnd,
+        birthday: ret.birthday,
+        joiningDate: ret.joining_date,
+        leaveBalance: ret.leave_balance,
+        position: ret.position,
+        managerId: ret.manager_id,
+        jobFamily: ret.job_family,
+      },
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    if (err.code === "23505") {
+      return res.status(409).json({ error: "Duplicate value" });
+    }
+    console.error("registerStaffAdmin failed:", err);
+    return res.status(500).json({ error: "Failed to register staff" });
+  } finally {
+    client.release();
+  }
+}
+
+
+export { register, login, refresh, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin };

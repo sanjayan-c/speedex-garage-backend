@@ -118,12 +118,7 @@ async function updateUntimeDurationForStaff(req, res) {
   }
 }
 
-/**
- * Return the effective shift for a user:
- * 1) staff-specific shift if both start/end exist
- * 2) fallback to global shift_hours
- * Returns: { start_local_time: "HH:MM:SS", end_local_time: "HH:MM:SS" } | null
- */
+// Get effective shift for a user → staff-specific shift else global shift
 async function getEffectiveShiftForUser(userId) {
   // per-staff
   const { rows: sRows } = await pool.query(
@@ -146,17 +141,7 @@ async function getEffectiveShiftForUser(userId) {
   return gRows.length ? gRows[0] : null;
 }
 
-/**
- * For STAFF ONLY:
- * - Check applied leave
- * - Builds 30-min buffered window from the effective shift
- * - If outside:
- *     set users.untime = { active: true }, untime_approved=false
- *     and log a mock admin alert
- * - If inside: (optionally) clear stale untime (commented)
- *
- * Returns an object with diagnostics you can log if you wish.
- */
+// Enforce shift/leave rules for staff and mark UnTime if outside
 async function enforceStaffUntimeWindow(userId, username, role) {
   if (role !== "staff") return { skipped: true };
 

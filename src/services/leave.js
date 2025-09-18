@@ -11,6 +11,7 @@ async function requestLeave(req, res) {
   try {
     const id = uuidv4();
 
+    console.log("start date", startDate);
     // Convert given times to UTC (assume user gives Toronto local time)
     const startUTC = DateTime.fromISO(startDate, { zone: "America/Toronto" })
       .toUTC()
@@ -19,7 +20,7 @@ async function requestLeave(req, res) {
       .toUTC()
       .toISO();
 
-    // 1️⃣ Check for overlapping leave requests for the same staff
+    // 1 Check for overlapping leave requests for the same staff
     const { rows: overlaps } = await pool.query(
       `SELECT * 
        FROM leave_requests 
@@ -42,7 +43,7 @@ async function requestLeave(req, res) {
       });
     }
 
-    // 2️⃣ Insert new leave
+    // 2 Insert new leave
     await pool.query(
       `INSERT INTO leave_requests 
         (id, staff_id, start_date, end_date, reason, leave_type, half_type, status) 
@@ -230,7 +231,7 @@ async function editLeave(req, res) {
   }
 }
 
-// 1️⃣ GET /api/leave/staff/:staffId (get leave by staff)
+// GET /api/leave/staff/:staffId (get leave by staff)
 async function getLeaveByStaff(req, res) {
   const { staffId } = req.params;
 
@@ -257,7 +258,7 @@ async function getLeaveByStaff(req, res) {
   }
 }
 
-// 2️⃣ DELETE /api/leave/:id (staff delete if pending)
+// DELETE /api/leave/:id (staff delete if pending)
 async function deleteLeaveByStaff(req, res) {
   const { id } = req.params;
 
@@ -293,7 +294,7 @@ async function deleteLeaveByStaff(req, res) {
   }
 }
 
-// 3️⃣ DELETE /api/leave/admin/:id (admin delete if leave day not passed)
+// DELETE /api/leave/admin/:id (admin delete if leave day not passed)
 async function deleteLeaveByAdmin(req, res) {
   const { id } = req.params;
 

@@ -11,10 +11,7 @@ import { DateTime } from "luxon";
 
 const APP_URL = process.env.CORS_ORIGIN || "http://localhost:5173";
 
-/**
- * GET /api/attendance/session/qr
- * Returns a dataURL PNG and a link that encodes the active session code.
- */
+// GET /api/attendance/session/qr
 async function getActiveSessionQr(req, res) {
   try {
     const s = await getActiveSession();
@@ -34,11 +31,7 @@ async function getActiveSessionQr(req, res) {
   }
 }
 
-/**
- * POST /api/attendance/mark
- * Body: { session: string, type?: "in"|"out"|"overtime_in"|"overtime_out" }
- * Uses the authenticated user’s staff record.
- */
+// POST /api/attendance/mark
 async function markAttendanceForStaff(req, res) {
   const { session, type } = req.body;
   try {
@@ -71,10 +64,7 @@ async function markAttendanceForStaff(req, res) {
   }
 }
 
-/**
- * GET /api/attendance/me
- * Lists last 50 attendance rows for the authenticated user’s staff record.
- */
+// GET /api/attendance/me
 async function listMyAttendance(req, res) {
   try {
     const staffQ = await pool.query("SELECT id FROM staff WHERE user_id=$1", [
@@ -84,8 +74,24 @@ async function listMyAttendance(req, res) {
       return res.status(404).json({ error: "Staff record not found" });
     const staffId = staffQ.rows[0].id;
 
+    // const { rows } = await pool.query(
+    //   "SELECT * FROM attendance_records WHERE staff_id=$1 ORDER BY attendance_date DESC LIMIT 50",
+    //   [staffId]
+    // );
     const { rows } = await pool.query(
-      "SELECT * FROM attendance_records WHERE staff_id=$1 ORDER BY attendance_date DESC LIMIT 50",
+      `SELECT
+         id,
+         staff_id,
+         attendance_date::text AS attendance_date,  -- force a plain 'YYYY-MM-DD' string
+         time_in,
+         time_out,
+         overtime_in,
+         overtime_out,
+         created_at
+       FROM attendance_records
+       WHERE staff_id=$1
+       ORDER BY attendance_date DESC
+       LIMIT 50`,
       [staffId]
     );
 
@@ -105,30 +111,7 @@ async function listMyAttendance(req, res) {
   }
 }
 
-// Optional: If you want admin endpoints later:
-// export async function createQrSession(req, res) {
-//   try {
-//     const session = await createNewQrSession(/* args if any */);
-//     return res.status(201).json(session);
-//   } catch (e) {
-//     console.error(e);
-//     return res.status(500).json({ error: "Failed to create session" });
-//   }
-// }
-
-/**
- * Returns whether a staff user's shift is already ended for "today" (Toronto).
- * Rules:
- * - If there's an attendance row today with time_out set:
- *    - If overtime_in is NULL -> ended (no OT started)
- *    - If overtime_in is NOT NULL and overtime_out IS NULL -> NOT ended (currently in OT)
- *    - If overtime_in is NOT NULL and overtime_out IS NOT NULL -> ended (OT finished)
- * - If no row or time_out is NULL -> NOT ended
- *
- * @param {string} userId - users.id
- * @returns {Promise<{ended: boolean, record?: any}>}
- */
-
+// Determine whether the user's regular shift has ended (considering overtime state)
 async function hasShiftEndedForToday(userId) {
   // resolve staff id
   const staffQ = await pool.query("SELECT id FROM staff WHERE user_id=$1", [
