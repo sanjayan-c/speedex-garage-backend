@@ -11,7 +11,6 @@ async function requestLeave(req, res) {
   try {
     const id = uuidv4();
 
-    console.log("start date", startDate);
     // Convert given times to UTC (assume user gives Toronto local time)
     const startUTC = DateTime.fromISO(startDate, { zone: "America/Toronto" })
       .toUTC()
@@ -19,6 +18,16 @@ async function requestLeave(req, res) {
     const endUTC = DateTime.fromISO(endDate, { zone: "America/Toronto" })
       .toUTC()
       .toISO();
+
+    const nowToronto = DateTime.now().setZone("America/Toronto");
+    const startToronto = DateTime.fromISO(startDate, {
+      zone: "America/Toronto",
+    });
+    if (startToronto <= nowToronto) {
+      return res
+        .status(400)
+        .json({ error: "Start date must be in the future (America/Toronto)" });
+    }
 
     // 1 Check for overlapping leave requests for the same staff
     const { rows: overlaps } = await pool.query(
@@ -208,6 +217,16 @@ async function editLeave(req, res) {
     const endUTC = endDate
       ? DateTime.fromISO(endDate, { zone: "America/Toronto" }).toUTC().toISO()
       : rows[0].end_date;
+
+    const nowToronto = DateTime.now().setZone("America/Toronto");
+    const startToronto = DateTime.fromISO(startDate, {
+      zone: "America/Toronto",
+    });
+    if (startToronto <= nowToronto) {
+      return res
+        .status(400)
+        .json({ error: "Start date must be in the future (America/Toronto)" });
+    }
 
     await pool.query(
       `UPDATE leave_requests
