@@ -111,6 +111,132 @@ async function listMyAttendance(req, res) {
   }
 }
 
+// POST /api/attendance/force-timeout-staff
+async function timeoutAllStaff(req, res) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Force OUT at end-of-shift (Toronto) for anyone still IN
+    const { rows } = await client.query(
+      `
+      WITH g AS (
+        SELECT end_local_time
+        FROM shift_hours
+        WHERE id = 1
+      ),
+      upd AS (
+        UPDATE attendance_records ar
+        SET
+          time_out = (
+            (ar.attendance_date + COALESCE(s.shift_end_local_time, g.end_local_time))::timestamp
+              AT TIME ZONE 'America/Toronto'
+          ),
+          is_forced_out = true
+        FROM staff s
+        CROSS JOIN g
+        WHERE
+          ar.staff_id = s.id
+          AND ar.attendance_date = (NOW() AT TIME ZONE 'America/Toronto')::date
+          AND ar.time_in IS NOT NULL
+          AND ar.time_out IS NULL
+        RETURNING ar.staff_id
+      )
+      SELECT staff_id FROM upd;
+      `
+    );
+
+    const staffIds = rows.map(r => r.staff_id);
+    const forcedCount = staffIds.length;
+
+    if (forcedCount > 0) {
+      // Clear 'allowed' for those users
+      await client.query(
+        `
+        UPDATE users u
+        SET allowed = false
+        FROM staff s
+        WHERE s.user_id = u.id
+          AND s.id = ANY($1::uuid[])
+        `,
+        [staffIds]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    // If used as an endpoint:
+    if (res) {
+      return res.json({ ok: true, forced: forcedCount });
+    }
+
+    // If used from cron:
+    console.log(`[force-timeout] Forced OUT for ${forcedCount} staff`);
+    return { forced: forcedCount };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("timeoutAllStaff failed:", e);
+    if (res) return res.status(500).json({ error: "Force timeout failed" });
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Append an UnTime session into attendance_records
+async function appendUntimeSessionForUser(userId, u) {
+  if (!u || !u.startTime) return; // duration not required anymore
+
+  // Resolve staff_id
+  const r = await pool.query(
+    `SELECT s.id AS staff_id
+       FROM staff s
+       JOIN users u ON u.id = s.user_id
+      WHERE u.id = $1`,
+    [userId]
+  );
+  if (!r.rowCount) return;
+  const staffId = r.rows[0].staff_id;
+
+  // Parse start (we store timestamptz strings)
+  let start = DateTime.fromISO(String(u.startTime), { setZone: true });
+  if (!start.isValid) start = DateTime.fromSQL(String(u.startTime), { setZone: true });
+  if (!start.isValid) return;
+
+  // Use "now" as the end time, in the same zone as start
+  let end = DateTime.now().setZone(start.zoneName || "UTC");
+  // Avoid negative duration edge cases
+  if (end < start) end = start;
+
+  // Attendance row is keyed by Toronto calendar day of the *start*
+  const attendanceDate = start.setZone("America/Toronto").toISODate();
+
+  // Ensure row exists
+  await pool.query(
+    `INSERT INTO attendance_records (id, staff_id, attendance_date)
+     VALUES (uuid_generate_v4(), $1, $2::date)
+     ON CONFLICT (staff_id, attendance_date) DO NOTHING`,
+    [staffId, attendanceDate]
+  );
+
+  // Append one session object
+  await pool.query(
+    `UPDATE attendance_records
+       SET untime_sessions = COALESCE(untime_sessions, '[]'::jsonb) || to_jsonb($3::json)
+     WHERE staff_id = $1
+       AND attendance_date = $2::date`,
+    [
+      staffId,
+      attendanceDate,
+      JSON.stringify({
+        start: start.toISO(),         // keep zoned ISO
+        end: end.toISO(),             // now, same zone as start
+        reason: u.reason ?? null,     // optional
+      }),
+    ]
+  );
+}
+
 // Determine whether the user's regular shift has ended (considering overtime state)
 async function hasShiftEndedForToday(userId) {
   // resolve staff id
@@ -162,5 +288,7 @@ export {
   getActiveSessionQr,
   markAttendanceForStaff,
   listMyAttendance,
+  timeoutAllStaff,
+  appendUntimeSessionForUser,
   hasShiftEndedForToday,
 };

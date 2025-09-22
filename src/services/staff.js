@@ -73,7 +73,8 @@ async function createStaff(req, res) {
     // NEW:
     birthday,
     joiningDate,
-    leaveBalance,
+    leaveTaken,
+    totalLeaves,
     position,
     managerId,
     jobFamily,
@@ -109,14 +110,14 @@ async function createStaff(req, res) {
       `INSERT INTO staff (
          id, user_id, first_name, last_name, email, contact_no, emergency_contact_no,
          shift_start_local_time, shift_end_local_time,
-         birthday, joining_date, leave_balance, position, manager_id, job_family
+         birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family
        )
        VALUES (
          $1,$2,$3,$4,$5,$6,$7,
          $8::time,$9::time,
-         $10::date,$11::date,$12,$13,$14,$15
+         $10::date,$11::date,$12,$13,$14,$15,$16
        )
-       RETURNING employee_id, birthday, joining_date, leave_balance, position, manager_id, job_family`,
+       RETURNING employee_id, birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family`,
       [
         id,
         userId,
@@ -129,7 +130,8 @@ async function createStaff(req, res) {
         shiftEnd ?? null,
         birthday ?? null,
         joiningDate ?? null,
-        leaveBalance ?? 0,
+        leaveTaken ?? 0,
+        totalLeaves ?? 0,
         position ?? null,
         managerId ?? null,
         jobFamily ?? null,
@@ -151,7 +153,8 @@ async function createStaff(req, res) {
       shiftEnd: shiftEnd ?? null,
       birthday: ret.birthday,
       joiningDate: ret.joining_date,
-      leaveBalance: ret.leave_balance,
+      leaveTaken: ret.leave_taken,
+      totalLeaves: ret.total_leaves,
       position: ret.position,
       managerId: ret.manager_id,
       jobFamily: ret.job_family,
@@ -237,7 +240,8 @@ async function updateStaff(req, res) {
       // NEW:
       birthday: "birthday",
       joiningDate: "joining_date",
-      leaveBalance: "leave_balance",
+      leaveTaken: "leave_taken",
+      totalLeaves: "total_leaves",
       position: "position",
       managerId: "manager_id",
       jobFamily: "job_family",
@@ -304,5 +308,5 @@ export {
   updateStaff,
   deleteStaff,
   assertStaffShiftWithinGlobal,
-  isStaffWindowInsideGlobal,
+  isStaffWindowInsideGlobal
 };

@@ -1,5 +1,6 @@
 import Joi from "joi";
 const timeString = Joi.string().pattern(/^\d{2}:\d{2}(:\d{2})?$/);
+const isoDateOnly = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
 
 const registerSchema = Joi.object({
   username: Joi.string().min(3).max(64).required(),
@@ -41,7 +42,8 @@ const staffCreateSchema = Joi.object({
   shiftEnd: timeString.required(),
   birthday: Joi.date().iso().optional(),
   joiningDate: Joi.date().iso().optional(),
-  leaveBalance: Joi.number().precision(2).min(0).optional(),
+  // leaveTaken: Joi.number().precision(2).min(0).optional(),
+  totalLeaves: Joi.number().precision(2).min(0).optional(),
   position: Joi.string().max(120).optional(),
   managerId: Joi.string().uuid().allow(null).optional(),
   jobFamily: Joi.string().max(120).optional(),
@@ -59,7 +61,8 @@ const staffUpdateSchema = Joi.object({
   shiftEnd: timeString.optional(),
   birthday: Joi.date().iso().optional().allow(null),
   joiningDate: Joi.date().iso().optional().allow(null),
-  leaveBalance: Joi.number().precision(2).min(0).optional(),
+  leaveTaken: Joi.number().precision(2).min(0).optional(),
+  totalLeaves: Joi.number().precision(2).min(0).optional(),
   position: Joi.string().max(120).optional().allow(null, ''),
   managerId: Joi.string().uuid().optional().allow(null),
   jobFamily: Joi.string().max(120).optional().allow(null, ''),
@@ -90,7 +93,8 @@ const adminRegisterStaffSchema = Joi.object({
 
   birthday: Joi.date().iso().optional(),
   joiningDate: Joi.date().iso().optional(),
-  leaveBalance: Joi.number().precision(2).min(0).optional(),
+  // leaveTaken: Joi.number().precision(2).min(0).optional(),
+  totalLeaves: Joi.number().precision(2).min(0).optional(),
   position: Joi.string().max(120).optional(),
   managerId: Joi.string().uuid().allow(null).optional(),
   jobFamily: Joi.string().max(120).optional(),
@@ -108,17 +112,9 @@ const untimeDurationSchema = Joi.object({
 
 const leaveCreateSchema = Joi.object({
   staffId: Joi.string().uuid().required(),
-  startDate: Joi.date().iso().required(),
-  endDate: Joi.date().iso().required(),
+  startDate: isoDateOnly.required(),
+  endDate: isoDateOnly.required(),
   reason: Joi.string().trim().min(3).max(2000).required(),
-  leaveType: Joi.string().valid("full_day", "half_day").default("full_day"),
-  halfType: Joi.string()
-    .valid("first_half", "second_half")
-    .when("leaveType", {
-      is: "half_day",
-      then: Joi.required(),
-      otherwise: Joi.forbidden(),
-    }),
 }).custom((v, h) => {
   if (new Date(v.startDate) > new Date(v.endDate)) {
     return h.error("any.invalid", { message: "startDate must be <= endDate" });
@@ -127,15 +123,9 @@ const leaveCreateSchema = Joi.object({
 });
 
 const leaveUpdateSchema = Joi.object({
-  startDate: Joi.date().iso().optional(),
-  endDate: Joi.date().iso().optional(),
+  startDate: isoDateOnly.optional(),
+  endDate: isoDateOnly.optional(),
   reason: Joi.string().trim().min(3).max(2000).optional(),
-  leaveType: Joi.string().valid("full_day", "half_day").optional(),
-  halfType: Joi.alternatives().conditional("leaveType", {
-    is: "half_day",
-    then: Joi.string().valid("first_half", "second_half").required(),
-    otherwise: Joi.string().valid("first_half", "second_half").optional(),
-  }),
 })
   .min(1)
   .custom((v, h) => {

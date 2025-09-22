@@ -15,13 +15,22 @@ import { leaveCreateSchema, leaveUpdateSchema } from "../validation/schemas.js";
 
 const router = express.Router();
 
-// Staff requests a new leave
+// Staff requests a new leave (no staffId in body)
 router.post(
   "/",
   auth(),
-  requireRole("staff"),
-  requestLeave
+  requireRole("staff"),                    
+  requestLeave            
 );
+
+// Admin creates a leave on behalf of staff (staffId required in body)
+router.post(
+  "/admin",
+  auth(),
+  requireRole("admin"),
+  requestLeave           
+);
+
 
 // Admin lists all leave requests
 router.get("/", auth(), requireRole("admin"), listLeave);
