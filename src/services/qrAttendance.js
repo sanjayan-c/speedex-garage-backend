@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import { pool } from "../utils/db.js";
 import { addMinutes } from "date-fns";
 import { enforceStaffUntimeWindow } from "../services/untime.js";
-import { DateTime} from "luxon";
+import { DateTime } from "luxon";
 
 const SESSION_TTL_MINUTES = 3; // rotate every 3 minutes
 
@@ -42,12 +42,17 @@ export async function generateQrDataURLForSession(sessionCode, appUrl) {
 }
 
 export async function markAttendance(staffId, sessionCode, markType = "in") {
+  // allow only "in" or "out"
+  if (!["in", "out"].includes(markType)) {
+    throw new Error("Unknown mark type");
+  }
+
+  // validate session
   const { rows: srows } = await pool.query(
     "SELECT id, expires_at, active FROM qr_sessions WHERE session_code=$1",
     [sessionCode]
   );
   if (!srows.length) throw new Error("Session invalid");
-
   const session = srows[0];
   if (!session.active || new Date(session.expires_at) < new Date()) {
     await pool.query("UPDATE qr_sessions SET active=false WHERE id=$1", [
@@ -56,10 +61,51 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
     throw new Error("Session expired");
   }
 
-  // const today = new Date().toISOString().slice(0, 10);
-  const today = DateTime.now().setZone("America/Toronto").toISODate();
+  // resolve the user (to pass into enforcement)
+  const { rows: uRows } = await pool.query(
+    `SELECT u.id AS user_id, u.username, u.role
+       FROM staff s JOIN users u ON s.user_id = u.id
+      WHERE s.id = $1`,
+    [staffId]
+  );
+  if (!uRows.length) throw new Error("Staff or User not found");
+  const user = uRows[0];
 
-  // ensure row exists
+  // run enforcement **before** touching attendance row
+  if (markType === "in") {
+    try {
+      const diag = await enforceStaffUntimeWindow(
+        user.user_id,
+        user.username,
+        user.role
+      );
+
+      // blocked by admin?
+      if (diag && diag.blocked) {
+        throw new Error("Untime attendance blocked by admin");
+      }
+
+      // UnTime got (re)started → do NOT mark attendance
+      if (diag && !diag.skipped) {
+        let msg = "UnTime pending admin approval";
+        if (diag.ended) msg = "Cannot mark attendance: shift already ended";
+        else if (diag.reason === "on-leave")
+          msg = "Cannot mark attendance: you are on leave today";
+        else if (diag.reason === "outside-window")
+          msg = "Cannot mark attendance: outside allowed shift window";
+        throw new Error(msg);
+      }
+      // else skipped === true → proceed
+    } catch (e) {
+      console.error("Untime enforcement failed:", e);
+      throw new Error(e.message || "Attendance blocked by policy");
+    }
+  }
+
+  const today = DateTime.now().setZone("America/Toronto").toISODate();
+  const nowTs = new Date().toISOString();
+
+  // ensure row exists (after passing enforcement)
   await pool.query(
     `INSERT INTO attendance_records (id, staff_id, attendance_date)
      VALUES ($1,$2,$3)
@@ -67,7 +113,6 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
     [uuidv4(), staffId, today]
   );
 
-  // fetch existing record
   const {
     rows: [rec],
   } = await pool.query(
@@ -75,86 +120,26 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
     [staffId, today]
   );
 
-  const nowTs = new Date().toISOString();
-  
-
   if (markType === "in") {
-    
-    try {
-  const { rows } = await pool.query(
-    `SELECT 
-       u.id AS user_id,
-       u.username,
-       u.role
-     FROM staff s
-     JOIN users u ON s.user_id = u.id
-     WHERE s.id = $1`,
-    [staffId]
-  );
-
-  if (!rows.length) {
-    return res.status(404).json({ error: "Staff or User not found" });
-  }
-
-    const user = rows[0];
-
-      const diag = await enforceStaffUntimeWindow(
-        user.user_id,
-        user.username,
-        user.role
-      );
-      if (diag && !diag.skipped) {
-        console.log("Current Toronto time:", diag.nowTorontoISO);
-        if (diag.windowStartISO && diag.windowEndISO) {
-          console.log(
-            "Allowed window:",
-            diag.windowStartISO,
-            "→",
-            diag.windowEndISO
-          );
-        }
-        if (diag.reason) {
-          console.log("Untime reason:", diag.reason);
-        }
-        if (diag.ended) {
-          console.warn("Already shift ended for the day");
-        }
-      }
-    } catch (e) {
-      console.error("Untime enforcement failed:", e);
-      // Non-fatal; continue login
-    }
     if (rec.time_in) throw new Error("Already marked IN for today");
     await pool.query(
       "UPDATE attendance_records SET time_in=$1 WHERE staff_id=$2 AND attendance_date=$3",
       [nowTs, staffId, today]
     );
-  } else if (markType === "out") {
+    await pool.query("UPDATE users SET allowed = true WHERE id = $1", [
+      user.user_id,
+    ]);
+  } else {
+    // markType === "out"
     if (rec.time_out) throw new Error("Already marked OUT for today");
     if (!rec.time_in) throw new Error("Cannot mark OUT before IN");
     await pool.query(
       "UPDATE attendance_records SET time_out=$1 WHERE staff_id=$2 AND attendance_date=$3",
       [nowTs, staffId, today]
     );
-  } else if (markType === "overtime-in") {
-    if (rec.overtime_in)
-      throw new Error("Already marked OVERTIME IN for today");
-    if (!rec.time_out) throw new Error("Overtime IN only after OUT");
-    await pool.query(
-      "UPDATE attendance_records SET overtime_in=$1 WHERE staff_id=$2 AND attendance_date=$3",
-      [nowTs, staffId, today]
-    );
-  } else if (markType === "overtime-out") {
-    if (rec.overtime_out)
-      throw new Error("Already marked OVERTIME OUT for today");
-    if (!rec.overtime_in)
-      throw new Error("Cannot mark OVERTIME OUT before OVERTIME IN");
-    await pool.query(
-      "UPDATE attendance_records SET overtime_out=$1 WHERE staff_id=$2 AND attendance_date=$3",
-      [nowTs, staffId, today]
-    );
-  } else {
-    throw new Error("Unknown mark type");
+    await pool.query("UPDATE users SET allowed = false WHERE id = $1", [
+      user.user_id,
+    ]);
   }
 
   const {

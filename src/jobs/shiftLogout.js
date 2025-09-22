@@ -2,6 +2,7 @@
 import cron from "node-cron";
 import { pool } from "../utils/db.js";
 import { logoutAllStaff } from "../services/auth.js";
+import { timeoutAllStaff } from "../services/attendance.js";
 
 /**
  * Read the end_local_time from DB, add 30 minutes, and return { hour, minute }
@@ -29,24 +30,29 @@ let currentTask = null;
  * Schedule (or reschedule) the daily logout job at end+30 in America/Toronto.
  */
 export async function scheduleShiftLogout() {
-  // Kill any previous schedule
   if (currentTask) {
     currentTask.stop();
     currentTask = null;
   }
 
   const { hour, minute } = await readEndPlus30();
-  const expr = `${minute} ${hour} * * *`; // every day at HH:MM
+  const expr = `${minute} ${hour} * * *`;
 
-  // Create the job in Toronto time
   currentTask = cron.schedule(
     expr,
     async () => {
       try {
+        // 1) Force OUT anyone still IN
+        await timeoutAllStaff();
+
+        // 2) Keep your old logout flow (revoke tokens, set is_login=false, clear untime, etc.)
         await logoutAllStaff();
-        console.log(`[cron] Logged out all users at end+30 (Toronto)`);
+
+        console.log(
+          `[cron] Forced time_out + logged out all staff at end+30 (Toronto)`
+        );
       } catch (e) {
-        console.error("[cron] Logout job failed:", e);
+        console.error("[cron] Logout/timeout job failed:", e);
       }
     },
     { timezone: "America/Toronto" }
@@ -59,7 +65,6 @@ export async function scheduleShiftLogout() {
   );
   currentTask.start();
 }
-
 /**
  * Call this after an admin updates shift hours to reschedule immediately.
  */

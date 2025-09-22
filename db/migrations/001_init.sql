@@ -89,10 +89,35 @@ ALTER TABLE staff
 --   CHECK (employee_id ~ '^SDX-[0-9]+$');
 
 
--- 1.4 Prevent self-managing
-ALTER TABLE staff
-  ADD CONSTRAINT staff_manager_not_self_chk
-  CHECK (manager_id IS NULL OR manager_id <> id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'staff_employee_id_format_chk'
+      AND conrelid = 'staff'::regclass
+  ) THEN
+    ALTER TABLE staff
+      ADD CONSTRAINT staff_employee_id_format_chk
+      CHECK (employee_id ~ '^SDX-[0-9]+$');
+  END IF;
+END$$;
+
+-- 1.4 Prevent self-managing (idempotent too, in case it already exists)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'staff_manager_not_self_chk'
+      AND conrelid = 'staff'::regclass
+  ) THEN
+    ALTER TABLE staff
+      ADD CONSTRAINT staff_manager_not_self_chk
+      CHECK (manager_id IS NULL OR manager_id <> id);
+  END IF;
+END$$;
+
 
 -- 1.5 Make employee_id immutable (reject updates if changed)
 CREATE OR REPLACE FUNCTION prevent_employee_id_update()
@@ -131,3 +156,158 @@ VALUES
   ('view_attendance', 'Can view attendance'),
   ('mark_attendance', 'Can mark attendance')
 ON CONFLICT DO NOTHING;
+
+-- 1.6 Add total_leaves to staff (annual entitlement, supports half-days)
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS total_leaves NUMERIC(10,2) NOT NULL DEFAULT 0;
+
+-- 1.7 (OLD) balance constraint on leave_balance -> only if column exists
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='staff' AND column_name='leave_balance'
+  ) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'staff_leave_balance_le_total_chk'
+        AND conrelid = 'staff'::regclass
+    ) THEN
+      ALTER TABLE staff
+        ADD CONSTRAINT staff_leave_balance_le_total_chk
+        CHECK (leave_balance <= total_leaves) NOT VALID;
+    END IF;
+
+    -- Try to validate if possible (ignore errors to keep idempotent)
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'staff_leave_balance_le_total_chk'
+          AND conrelid = 'staff'::regclass
+          AND NOT convalidated
+      ) THEN
+        ALTER TABLE staff VALIDATE CONSTRAINT staff_leave_balance_le_total_chk;
+      END IF;
+    EXCEPTION WHEN others THEN NULL; END;
+  END IF;
+END$$;
+
+-- 2. RENAME leave_balance -> leave_taken, but only when appropriate
+DO $$
+DECLARE
+  has_balance boolean;
+  has_taken   boolean;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='staff' AND column_name='leave_balance'
+  ) INTO has_balance;
+
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='staff' AND column_name='leave_taken'
+  ) INTO has_taken;
+
+  -- Case A: balance exists and taken does not -> rename
+  IF has_balance AND NOT has_taken THEN
+    ALTER TABLE staff RENAME COLUMN leave_balance TO leave_taken;
+
+  -- Case B: both exist (someone already created leave_taken and left old balance) -> drop the old one
+  ELSIF has_balance AND has_taken THEN
+    -- optional: copy any non-null values over before dropping, if needed
+    -- UPDATE staff SET leave_taken = COALESCE(leave_taken, leave_balance);
+    ALTER TABLE staff DROP COLUMN leave_balance;
+  END IF;
+
+  -- If only leave_taken exists, do nothing.
+END$$;
+
+-- 3. Constraint on leave_taken <= total_leaves (idempotent)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='staff' AND column_name='leave_taken'
+  ) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'staff_leave_taken_le_total_chk'
+        AND conrelid = 'staff'::regclass
+    ) THEN
+      ALTER TABLE staff
+        ADD CONSTRAINT staff_leave_taken_le_total_chk
+        CHECK (leave_taken <= total_leaves) NOT VALID;
+    END IF;
+
+    -- Try to validate if possible (ignore errors so reruns are safe)
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'staff_leave_taken_le_total_chk'
+          AND conrelid = 'staff'::regclass
+          AND NOT convalidated
+      ) THEN
+        ALTER TABLE staff VALIDATE CONSTRAINT staff_leave_taken_le_total_chk;
+      END IF;
+    EXCEPTION WHEN others THEN NULL; END;
+  END IF;
+END$$;
+
+
+/* --- Make leave_requests date-only and remove half-day columns --- */
+
+-- 1) Drop half-day columns if they exist
+ALTER TABLE leave_requests DROP COLUMN IF EXISTS leave_type;
+ALTER TABLE leave_requests DROP COLUMN IF EXISTS half_type;
+
+-- 2) Ensure start_date / end_date are DATE (idempotent + safe conversion)
+DO $$
+DECLARE
+  start_type text;
+  end_type   text;
+BEGIN
+  SELECT data_type INTO start_type
+  FROM information_schema.columns
+  WHERE table_name = 'leave_requests' AND column_name = 'start_date';
+
+  SELECT data_type INTO end_type
+  FROM information_schema.columns
+  WHERE table_name = 'leave_requests' AND column_name = 'end_date';
+
+  -- Convert TIMESTAMPTZ -> DATE using Toronto local day; if already DATE, skip.
+  IF start_type IS NOT NULL AND start_type <> 'date' THEN
+    EXECUTE $sql$
+      ALTER TABLE leave_requests
+      ALTER COLUMN start_date TYPE date
+      USING ( (start_date AT TIME ZONE 'America/Toronto')::date )
+    $sql$;
+  END IF;
+
+  IF end_type IS NOT NULL AND end_type <> 'date' THEN
+    EXECUTE $sql$
+      ALTER TABLE leave_requests
+      ALTER COLUMN end_date TYPE date
+      USING ( (end_date AT TIME ZONE 'America/Toronto')::date )
+    $sql$;
+  END IF;
+END$$;
+
+-- 3) Enforce valid range (inclusive); idempotent
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'leave_dates_valid_chk'
+      AND conrelid = 'leave_requests'::regclass
+  ) THEN
+    ALTER TABLE leave_requests
+      ADD CONSTRAINT leave_dates_valid_chk
+      CHECK (end_date >= start_date);
+  END IF;
+END$$;
+
+-- Add access control flags on users (idempotent)
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS allowed    BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT false;
+

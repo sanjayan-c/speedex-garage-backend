@@ -12,3 +12,15 @@ CREATE TABLE IF NOT EXISTS attendance_records (
 );
 
 CREATE INDEX IF NOT EXISTS idx_attendance_staff_date ON attendance_records(staff_id, attendance_date);
+
+ALTER TABLE attendance_records
+  ADD COLUMN IF NOT EXISTS is_forced_out BOOLEAN NOT NULL DEFAULT false;
+
+
+-- Add JSONB array to store multiple UnTime sessions per day
+ALTER TABLE attendance_records
+  ADD COLUMN IF NOT EXISTS untime_sessions JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- Drop overtime fields if they exist
+ALTER TABLE attendance_records DROP COLUMN IF EXISTS overtime_in;
+ALTER TABLE attendance_records DROP COLUMN IF EXISTS overtime_out;

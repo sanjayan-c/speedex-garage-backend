@@ -300,7 +300,8 @@ async function registerStaffAdmin(req, res) {
     // NEW:
     birthday,
     joiningDate,
-    leaveBalance,
+    leaveTaken,
+    totalLeaves,
     position,
     managerId,
     jobFamily,
@@ -348,14 +349,14 @@ async function registerStaffAdmin(req, res) {
       `INSERT INTO staff (
          id, user_id, first_name, last_name, email, contact_no, emergency_contact_no,
          shift_start_local_time, shift_end_local_time,
-         birthday, joining_date, leave_balance, position, manager_id, job_family
+         birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family
        )
        VALUES (
          $1,$2,$3,$4,$5,$6,$7,
          $8::time,$9::time,
-         $10::date,$11::date,$12,$13,$14,$15
+         $10::date,$11::date,$12,$13,$14,$15,$16
        )
-       RETURNING employee_id, birthday, joining_date, leave_balance, position, manager_id, job_family`,
+       RETURNING employee_id, birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family`,
       [
         staffId,
         userId,
@@ -368,7 +369,8 @@ async function registerStaffAdmin(req, res) {
         shiftEnd,
         birthday ?? null,
         joiningDate ?? null,
-        leaveBalance ?? 0,
+        leaveTaken ?? 0,
+        totalLeaves ?? 0,
         position ?? null,
         managerId ?? null,
         jobFamily ?? null,
@@ -393,7 +395,8 @@ async function registerStaffAdmin(req, res) {
         shiftEnd,
         birthday: ret.birthday,
         joiningDate: ret.joining_date,
-        leaveBalance: ret.leave_balance,
+        leaveTaken: ret.leave_taken,
+        totalLeaves: ret.total_leaves,
         position: ret.position,
         managerId: ret.manager_id,
         jobFamily: ret.job_family,
@@ -411,5 +414,35 @@ async function registerStaffAdmin(req, res) {
   }
 }
 
+// PATCH /api/users/:id/block  Body: { blocked: true|false }
+async function setUserBlockedStatus(req, res) {
+  const { id } = req.params;
+  const { blocked } = req.body || {};
 
-export { register, login, refresh, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin };
+  if (typeof blocked !== "boolean") {
+    return res.status(400).json({ error: "blocked must be a boolean" });
+  }
+
+  try {
+    const { rowCount, rows } = await pool.query(
+      `UPDATE users
+          SET is_blocked = $2
+        WHERE id = $1
+      RETURNING id, username, role, is_blocked`,
+      [id, blocked]
+    );
+    if (!rowCount) return res.status(404).json({ error: "User not found" });
+
+    return res.json({
+      ok: true,
+      user: rows[0],
+      message: blocked ? "User blocked" : "User unblocked",
+    });
+  } catch (e) {
+    console.error("setUserBlockedStatus failed:", e);
+    res.status(500).json({ error: "Failed to update blocked status" });
+  }
+}
+
+
+export { register, login, refresh, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin, setUserBlockedStatus };

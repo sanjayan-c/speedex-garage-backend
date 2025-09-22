@@ -13,7 +13,8 @@ import {
   logout,
   logoutAllUsers,
   logoutAllStaff,
-  registerStaffAdmin
+  registerStaffAdmin,
+  setUserBlockedStatus
 } from "../services/auth.js";
 import { auth, requireRole } from "../middleware/auth.js";
 
@@ -50,5 +51,7 @@ router.post(
   requireRole("admin"),
   logoutAllStaff
 );
+
+router.patch("/:id/block", auth(), requireRole("admin"), setUserBlockedStatus);
 
 export default router;
