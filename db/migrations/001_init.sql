@@ -62,7 +62,7 @@ ALTER TABLE leave_requests
   ALTER COLUMN start_date TYPE TIMESTAMPTZ USING start_date::timestamptz,
   ALTER COLUMN end_date TYPE TIMESTAMPTZ USING end_date::timestamptz;
 
-ALTER TABLE staff
+ALTER TABLE  IF NOT EXISTS staff
 ADD COLUMN IF NOT EXISTS shift_start_local_time TIME NULL,
 ADD COLUMN IF NOT EXISTS shift_end_local_time TIME NULL;
 
@@ -83,10 +83,11 @@ ALTER TABLE staff
   ADD COLUMN IF NOT EXISTS manager_id UUID NULL REFERENCES staff (id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS job_family TEXT;
 
--- 1.3 Enforce format of employee_id
-ALTER TABLE staff
-  ADD CONSTRAINT staff_employee_id_format_chk
-  CHECK (employee_id ~ '^SDX-[0-9]+$');
+-- -- 1.3 Enforce format of employee_id
+-- ALTER TABLE staff
+--   ADD CONSTRAINT staff_employee_id_format_chk
+--   CHECK (employee_id ~ '^SDX-[0-9]+$');
+
 
 -- 1.4 Prevent self-managing
 ALTER TABLE staff
@@ -109,3 +110,24 @@ CREATE TRIGGER trg_staff_employee_id_immutable
 BEFORE UPDATE ON staff
 FOR EACH ROW EXECUTE FUNCTION prevent_employee_id_update();
 
+-- Permissions table
+CREATE TABLE IF NOT EXISTS permissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT UNIQUE NOT NULL, -- e.g. "approve_leave", "delete_leave"
+    description TEXT
+);
+
+-- User-Permissions mapping table
+CREATE TABLE IF NOT EXISTS user_permissions (
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    permission_id UUID REFERENCES permissions(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, permission_id)
+);
+
+INSERT INTO permissions (name, description)
+VALUES 
+  ('approve_leave', 'Can approve or reject leave requests'),
+  ('delete_leave', 'Can delete leave requests'),
+  ('view_attendance', 'Can view attendance'),
+  ('mark_attendance', 'Can mark attendance')
+ON CONFLICT DO NOTHING;
