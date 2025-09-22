@@ -6,6 +6,7 @@ import {
   signAccessToken,
   signRefreshToken,
   verifyRefreshToken,
+  verifyAccessToken,
 } from "../utils/jwt.js";
 import { enforceStaffUntimeWindow } from "../services/untime.js";
 import { assertStaffShiftWithinGlobal } from "../services/staff.js";
@@ -24,6 +25,19 @@ function setRefreshCookie(res, token) {
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 }
+
+function setAccessCookie(res, token) {
+  const isProd = process.env.NODE_ENV === "production";
+
+  res.cookie("accessToken", token, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    path: "/api",
+    maxAge: 15 * 60 * 1000, // 15 minutes
+  });
+}
+
 
 // POST /api/auth/register
 async function register(req, res) {
@@ -118,6 +132,8 @@ async function login(req, res) {
       role: user.role,
     });
 
+   
+
     const bcryptHash = await bcrypt.hash(refreshToken, 12);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
@@ -127,6 +143,7 @@ async function login(req, res) {
     );
     await pool.query("UPDATE users SET is_login=true WHERE id=$1", [user.id]);
 
+     setAccessCookie(res, accessToken);
     setRefreshCookie(res, refreshToken);
     res.json({
       accessToken,
@@ -180,6 +197,9 @@ async function refresh(req, res) {
       username: payload.username,
       role: payload.role,
     });
+
+
+
     const newHash = await bcrypt.hash(newRefresh, 12);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
@@ -187,7 +207,7 @@ async function refresh(req, res) {
       "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1,$2,$3)",
       [payload.sub, newHash, expiresAt.toISOString()]
     );
-
+    setAccessCookie(res, newAccess);
     setRefreshCookie(res, newRefresh);
     res.json({ accessToken: newAccess });
   } catch (err) {
@@ -443,6 +463,30 @@ async function setUserBlockedStatus(req, res) {
     res.status(500).json({ error: "Failed to update blocked status" });
   }
 }
+async function getCurrentUser(req, res) {
+  try {
+    const token = req.cookies?.accessToken;
+    if (!token) return res.status(401).json({ error: "Not authenticated" });
+
+    const payload = verifyAccessToken(token);
+
+    const { rows } = await pool.query(
+      "SELECT id, username, role, is_blocked FROM users WHERE id=$1",
+      [payload.sub]
+    );
+    if (!rows.length) return res.status(404).json({ error: "User not found" });
+
+    if (rows[0].is_blocked) {
+      return res.status(403).json({ error: "User is blocked" });
+    }
+
+    res.json({ user: { id: rows[0].id, username: rows[0].username, role: rows[0].role } });
+  } catch (err) {
+    console.error(err);
+    res.status(401).json({ error: "Invalid or expired token" });
+  }
+}
 
 
-export { register, login, refresh, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin, setUserBlockedStatus };
+
+export { register, login, refresh,getCurrentUser, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin, setUserBlockedStatus };
