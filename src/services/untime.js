@@ -494,11 +494,19 @@ async function enforceStaffUntimeWindow(userId, username, role) {
        WHERE id = $1`,
       [userId]
     );
+    const {
+  rows: [u],
+} = await pool.query(
+  "SELECT untime, untime_approved FROM users WHERE id=$1",
+  [userId]
+);
     return {
       skipped: false,
       ended: true,
       reason: "ended",
       nowTorontoISO: nowIso,
+      untimeActive: u.untime?.active === true,
+  untimeApproved: u.untime_approved,
     };
   }
 
@@ -531,11 +539,19 @@ async function enforceStaffUntimeWindow(userId, username, role) {
        WHERE id = $1`,
       [userId]
     );
+    const {
+  rows: [u],
+} = await pool.query(
+  "SELECT untime, untime_approved FROM users WHERE id=$1",
+  [userId]
+);
     return {
       skipped: false,
       reason: "on-leave",
       nowTorontoISO: nowIso,
       leave: leaveStatus.leave,
+      untimeActive: u.untime?.active === true,
+  untimeApproved: u.untime_approved,
     };
   }
 
@@ -573,12 +589,20 @@ async function enforceStaffUntimeWindow(userId, username, role) {
        WHERE id = $1`,
       [userId]
     );
+    const {
+  rows: [u],
+} = await pool.query(
+  "SELECT untime, untime_approved FROM users WHERE id=$1",
+  [userId]
+);
     return {
       outside: true,
       reason: "outside-window",
       nowTorontoISO: nowIso,
       windowStartISO: windowStart.toISO(),
       windowEndISO: windowEnd.toISO(),
+      untimeActive: u.untime?.active === true,
+  untimeApproved: u.untime_approved,
     };
   }
 

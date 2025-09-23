@@ -21,7 +21,7 @@ async function getActiveSessionQr(req, res) {
 
     return res.json({
       dataUrl,
-      link: `${APP_URL}?session=${encodeURIComponent(s.session_code)}`,
+      link: `${APP_URL}/attendance/mark?session=${encodeURIComponent(s.session_code)}`,
       createdAt: toToronto(s.created_at),
       expiresAt: toToronto(s.expires_at),
     });

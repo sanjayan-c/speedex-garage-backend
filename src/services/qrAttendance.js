@@ -86,15 +86,36 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
       }
 
       // UnTime got (re)started → do NOT mark attendance
-      if (diag && !diag.skipped) {
-        let msg = "UnTime pending admin approval";
-        if (diag.ended) msg = "Cannot mark attendance: shift already ended";
-        else if (diag.reason === "on-leave")
-          msg = "Cannot mark attendance: you are on leave today";
-        else if (diag.reason === "outside-window")
-          msg = "Cannot mark attendance: outside allowed shift window";
-        throw new Error(msg);
-      }
+      // if (diag && !diag.skipped) {
+      //   let msg = "UnTime pending admin approval";
+      //   if (diag.ended) msg = "Cannot mark attendance: shift already ended";
+      //   else if (diag.reason === "on-leave")
+      //     msg = "Cannot mark attendance: you are on leave today";
+      //   else if (diag.reason === "outside-window")
+      //     msg = "Cannot mark attendance: outside allowed shift window";
+      //   throw new Error(msg);
+      // }
+      // UnTime got (re)started → do NOT mark attendance
+if (diag && !diag.skipped) {
+  // check explicit reasons first
+  if (diag.ended) {
+    throw new Error("Cannot mark attendance: shift already ended");
+  }
+  if (diag.reason === "on-leave") {
+    throw new Error("Cannot mark attendance: you are on leave today");
+  }
+  if (diag.reason === "outside-window") {
+    throw new Error("Cannot mark attendance: outside allowed shift window");
+  }
+
+  // only block if untime is active & not approved
+  if (diag.untimeActive && diag.untimeApproved === false) {
+    throw new Error("UnTime pending admin approval");
+  }
+
+  // else → allow attendance
+}
+
       // else skipped === true → proceed
     } catch (e) {
       console.error("Untime enforcement failed:", e);
