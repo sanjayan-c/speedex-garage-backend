@@ -300,10 +300,40 @@ async function deleteStaff(req, res) {
     res.status(500).json({ error: "Failed to delete staff" });
   }
 }
+/**
+ * GET /api/staff/:id/allowed
+ * Returns whether the staff's user is allowed
+ */
+async function getStaffAllowed(req, res) {
+  const staffId = req.params.id;
+
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT u.allowed
+      FROM staff s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.id = $1
+      `,
+      [staffId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Staff not found" });
+    }
+
+    res.json({ allowed: rows[0].allowed });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch allowed status" });
+  }
+}
+
 
 export {
   createStaff,
   listStaff,
+  getStaffAllowed,
   getStaffById,
   updateStaff,
   deleteStaff,
