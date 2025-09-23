@@ -1,64 +1,90 @@
 // src/jobs/untimeEnforcer.js
 import cron from "node-cron";
 import { pool } from "../utils/db.js";
-import { appendUntimeSessionForUser } from "../services/attendance.js"; // <-- import this
+import { appendUntimeSessionForUser } from "../services/attendance.js";
 
 async function enforceUntimeExpirations() {
+  console.log("[untime-enforcer] Running check for expired UnTime sessions...");
+
   try {
-    // Find approved & active UnTime sessions that have EXPIRED by Toronto time
     const { rows } = await pool.query(`
-      SELECT
-        id,
-        username,
-        untime,
-        (untime->>'startTime')           AS start_time,
-        (untime->>'durationMinutes')::int AS duration_minutes,
-        (untime->>'reason')              AS reason
-      FROM users
-      WHERE untime_approved = true
-        AND untime IS NOT NULL
-        AND (untime->>'active')::boolean = true
-        AND (
-          (NOW() AT TIME ZONE 'America/Toronto') >
+      WITH candidates AS (
+        SELECT
+          id,
+          username,
+          untime,
+          (untime->>'startTime')::timestamptz                                  AS start_ts,
+          (untime->>'durationMinutes')::int                                     AS duration_minutes,
+          (untime->>'reason')                                                   AS reason,
           (
             ((untime->>'startTime')::timestamptz AT TIME ZONE 'America/Toronto')
             + make_interval(mins := (untime->>'durationMinutes')::int)
-          )
-        )
+          )                                                                     AS local_end_ts,
+          (NOW() AT TIME ZONE 'America/Toronto')                                AS local_now_ts
+        FROM users
+        WHERE untime IS NOT NULL
+          AND (untime->>'active')::boolean = true
+          AND (untime->>'durationMinutes') IS NOT NULL
+      )
+      SELECT
+        id, username, untime,
+        start_ts,
+        duration_minutes,
+        reason,
+        local_end_ts,
+        local_now_ts
+      FROM candidates
+      WHERE local_now_ts > local_end_ts
     `);
+
+    console.log(`[untime-enforcer] Found ${rows.length} expired UnTime session(s).`);
 
     if (!rows.length) return;
 
     for (const u of rows) {
-      // 1) Persist this UnTime window into attendance_records BEFORE clearing it
-      await appendUntimeSessionForUser(u.id, {
-        startTime: u.start_time,
-        durationMinutes: u.duration_minutes,
-        reason: u.reason ?? null,
-      });
+      const startIso = u.start_ts?.toISOString?.() ?? String(u.start_ts);
+      const endIso   = u.local_end_ts;
+      const nowIso   = u.local_now_ts;
 
-      // 2) Revoke tokens (logout everywhere)
-      await pool.query(
-        "UPDATE refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false",
-        [u.id]
+      console.log(
+        `[untime-enforcer] Expired UnTime → user=${u.username} (${u.id}), reason=${u.reason}, start=${startIso}, end(Toronto)=${endIso}, now(Toronto)=${nowIso}`
       );
 
-      // 3) Clear UnTime, mark as not approved, and DISALLOW further actions
-      await pool.query(
-        `UPDATE users
-           SET is_login         = false,
-               untime           = NULL,
-               untime_approved  = false,
-               allowed          = false
-         WHERE id = $1`,
-        [u.id]
-      );
+      try {
+        // 1) Persist into attendance_records
+        await appendUntimeSessionForUser(u.id, {
+          startTime: startIso,
+          durationMinutes: u.duration_minutes,
+          reason: u.reason ?? null,
+        });
 
-      console.log(`[untime-enforcer] Expired UnTime closed & recorded for ${u.username} (${u.id})`);
+        // 2) Revoke tokens
+        await pool.query(
+          "UPDATE refresh_tokens SET revoked = true WHERE user_id = $1 AND revoked = false",
+          [u.id]
+        );
+
+        // 3) Clear UnTime & disallow
+        await pool.query(
+          `UPDATE users
+             SET is_login         = false,
+                 untime           = NULL,
+                 untime_approved  = false,
+                 allowed          = false
+           WHERE id = $1`,
+          [u.id]
+        );
+
+        console.log(`[untime-enforcer] Cleanup completed for ${u.username} (${u.id}) ✅`);
+      } catch (innerErr) {
+        console.error(`[untime-enforcer] Error processing user ${u.username} (${u.id}):`, innerErr);
+      }
     }
   } catch (e) {
-    console.error("[untime-enforcer] Failed:", e);
+    console.error("[untime-enforcer] Failed main query or loop:", e);
   }
+
+  console.log("[untime-enforcer] Check cycle completed.\n");
 }
 
 // Schedule every minute in Toronto time
