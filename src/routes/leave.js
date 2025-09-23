@@ -33,7 +33,7 @@ router.post(
 );
 
 
-router.get("/", auth(), requireRole("admin"), listLeave);
+router.get("/", auth(), requirePermission("approve_leave"), listLeave);
 
 // Staff with special permission approves leave
 router.patch(

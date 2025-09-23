@@ -106,11 +106,110 @@ async function requestLeave(req, res) {
   }
 }
 
+// // GET /api/leave (admin or staff)
+// async function listLeave(req, res) {
+//   try {
+//     const { rows } = await pool.query(
+//       `SELECT lr.*, s.first_name, s.last_name
+//          FROM leave_requests lr
+//          JOIN staff s ON lr.staff_id = s.id
+//         ORDER BY lr.created_at DESC`
+//     );
+
+//     const data = rows.map((r) => ({
+//       ...r,
+//       // start_date/end_date are DATE in DB; send YYYY-MM-DD
+//       start_date: DateTime.fromJSDate(r.start_date).toISODate(),
+//       end_date: DateTime.fromJSDate(r.end_date).toISODate(),
+//       // created_at/updated_at are timestamptz (UTC) → convert to Toronto
+//       created_at: DateTime.fromJSDate(r.created_at)
+//         .setZone("America/Toronto")
+//         .toISO(),
+//       updated_at: DateTime.fromJSDate(r.updated_at)
+//         .setZone("America/Toronto")
+//         .toISO(),
+//     }));
+
+//     res.json(data);
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: "Failed to fetch leave requests" });
+//   }
+// }
+
+// // GET /api/leave/me (staff only)
+// async function listMyLeave(req, res) {
+//   try {
+//     const staffQ = await pool.query("SELECT id FROM staff WHERE user_id=$1", [
+//       req.user.sub || req.user.id,
+//     ]);
+//     if (!staffQ.rows.length)
+//       return res.status(404).json({ error: "Staff record not found" });
+
+//     const staffId = staffQ.rows[0].id;
+
+//     const { rows } = await pool.query(
+//       `SELECT * FROM leave_requests
+//         WHERE staff_id = $1
+//         ORDER BY created_at DESC`,
+//       [staffId]
+//     );
+
+//     const data = rows.map((r) => ({
+//       ...r,
+//       start_date: DateTime.fromJSDate(r.start_date).toISODate(),
+//       end_date: DateTime.fromJSDate(r.end_date).toISODate(),
+//       created_at: DateTime.fromJSDate(r.created_at)
+//         .setZone("America/Toronto")
+//         .toISO(),
+//       updated_at: DateTime.fromJSDate(r.updated_at)
+//         .setZone("America/Toronto")
+//         .toISO(),
+//     }));
+
+//     res.json(data);
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: "Failed to fetch my leave requests" });
+//   }
+// }
+
+// // GET /api/leave/staff/:staffId
+// async function getLeaveByStaff(req, res) {
+//   const { staffId } = req.params;
+
+//   try {
+//     const { rows } = await pool.query(
+//       `SELECT * FROM leave_requests
+//         WHERE staff_id=$1
+//         ORDER BY created_at DESC`,
+//       [staffId]
+//     );
+
+//     const data = rows.map((r) => ({
+//       ...r,
+//       start_date: DateTime.fromJSDate(r.start_date).toISODate(),
+//       end_date: DateTime.fromJSDate(r.end_date).toISODate(),
+//       created_at: DateTime.fromJSDate(r.created_at)
+//         .setZone("America/Toronto")
+//         .toISO(),
+//       updated_at: DateTime.fromJSDate(r.updated_at)
+//         .setZone("America/Toronto")
+//         .toISO(),
+//     }));
+
+//     res.json(data);
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: "Failed to fetch leave by staff" });
+//   }
+// }
+
 // GET /api/leave (admin or staff)
 async function listLeave(req, res) {
   try {
     const { rows } = await pool.query(
-      `SELECT lr.*, s.first_name, s.last_name
+      `SELECT lr.*, s.employee_id, s.first_name, s.last_name
          FROM leave_requests lr
          JOIN staff s ON lr.staff_id = s.id
         ORDER BY lr.created_at DESC`
@@ -118,10 +217,8 @@ async function listLeave(req, res) {
 
     const data = rows.map((r) => ({
       ...r,
-      // start_date/end_date are DATE in DB; send YYYY-MM-DD
       start_date: DateTime.fromJSDate(r.start_date).toISODate(),
       end_date: DateTime.fromJSDate(r.end_date).toISODate(),
-      // created_at/updated_at are timestamptz (UTC) → convert to Toronto
       created_at: DateTime.fromJSDate(r.created_at)
         .setZone("America/Toronto")
         .toISO(),
@@ -140,23 +237,27 @@ async function listLeave(req, res) {
 // GET /api/leave/me (staff only)
 async function listMyLeave(req, res) {
   try {
-    const staffQ = await pool.query("SELECT id FROM staff WHERE user_id=$1", [
-      req.user.sub || req.user.id,
-    ]);
+    const staffQ = await pool.query(
+      "SELECT id, employee_id, first_name FROM staff WHERE user_id=$1",
+      [req.user.sub || req.user.id]
+    );
     if (!staffQ.rows.length)
       return res.status(404).json({ error: "Staff record not found" });
 
-    const staffId = staffQ.rows[0].id;
+    const { id: staffId, employee_id, first_name } = staffQ.rows[0];
 
     const { rows } = await pool.query(
-      `SELECT * FROM leave_requests
-        WHERE staff_id = $1
-        ORDER BY created_at DESC`,
+      `SELECT lr.*
+         FROM leave_requests lr
+        WHERE lr.staff_id = $1
+        ORDER BY lr.created_at DESC`,
       [staffId]
     );
 
     const data = rows.map((r) => ({
       ...r,
+      employee_id,
+      first_name,
       start_date: DateTime.fromJSDate(r.start_date).toISODate(),
       end_date: DateTime.fromJSDate(r.end_date).toISODate(),
       created_at: DateTime.fromJSDate(r.created_at)
@@ -180,9 +281,11 @@ async function getLeaveByStaff(req, res) {
 
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM leave_requests
-        WHERE staff_id=$1
-        ORDER BY created_at DESC`,
+      `SELECT lr.*, s.employee_id, s.first_name
+         FROM leave_requests lr
+         JOIN staff s ON lr.staff_id = s.id
+        WHERE lr.staff_id=$1
+        ORDER BY lr.created_at DESC`,
       [staffId]
     );
 
@@ -204,6 +307,7 @@ async function getLeaveByStaff(req, res) {
     res.status(500).json({ error: "Failed to fetch leave by staff" });
   }
 }
+
 
 // PATCH /api/leave/:id/status (admin approve/reject)
 async function updateLeaveStatus(req, res) {
