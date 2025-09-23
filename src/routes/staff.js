@@ -9,6 +9,7 @@ import {
   getStaffById,
   updateStaff,
   deleteStaff,
+  getStaffAllowed,
 } from "../services/staff.js";
 
 const router = express.Router();
@@ -39,5 +40,6 @@ router.patch(
 
 // Delete a staff record (admin only)
 router.delete("/:id", auth(true), requireRole("admin"), deleteStaff);
+router.get("/:id/allowed", auth(true), requireRole("admin"), getStaffAllowed);
 
 export default router;

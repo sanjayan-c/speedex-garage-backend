@@ -488,5 +488,26 @@ async function getCurrentUser(req, res) {
 }
 
 
+// GET /api/users/me/allowed
+async function getUserAllowedStatus(req, res) {
+  try {
+    const userId = req.user.sub || req.user.id;
 
-export { register, login, refresh,getCurrentUser, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin, setUserBlockedStatus };
+    const { rows } = await pool.query(
+      "SELECT allowed FROM users WHERE id=$1",
+      [userId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    return res.json({ allowed: rows[0].allowed });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to fetch allowed status" });
+  }
+}
+
+
+export { register, getUserAllowedStatus, login, refresh,getCurrentUser, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin, setUserBlockedStatus };
