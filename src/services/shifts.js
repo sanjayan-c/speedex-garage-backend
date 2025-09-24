@@ -5,39 +5,52 @@ import { isStaffWindowInsideGlobal } from "../services/staff.js";
 
 /* ---------------- helpers for time-window checks ---------------- */
 
-// Regex for "HH:mm" or "HH:mm:ss"
 const timeRe = /^\d{2}:\d{2}(:\d{2})?$/;
 
-// Convert "HH:mm(:ss)" string to total minutes (0..1439)
 function toMinutes(t) {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + (m ?? 0);
 }
 
-// Read current global shift hours (exact, no margin). Returns { start, end, updatedAt } as "HH:MM:SS".
+// Read current global shift hours (exact, no margin).
+// Returns { start, end, marginTime, alertTime, updatedAt } as strings/ints.
 async function readGlobalShiftTime() {
   const { rows } = await pool.query(
     `SELECT
        start_local_time::text AS start_local_time,
        end_local_time::text   AS end_local_time,
+       margintime,
+       alerttime,
        updated_at
      FROM shift_hours
      WHERE id=1`
   );
-  if (!rows.length) {
-    throw new Error("Shift hours not configured");
-  }
-  const { start_local_time, end_local_time, updated_at } = rows[0];
-  return { start: start_local_time, end: end_local_time, updatedAt: updated_at };
+  if (!rows.length) throw new Error("Shift hours not configured");
+
+  const {
+    start_local_time,
+    end_local_time,
+    margintime,
+    alerttime,
+    updated_at,
+  } = rows[0];
+
+  return {
+    start: start_local_time,
+    end: end_local_time,
+    marginTime: Number(margintime),
+    alertTime: Number(alerttime),
+    updatedAt: updated_at,
+  };
 }
 
 /* ---------------- routes ---------------- */
 
-// GET /api/shifts — return current global shift hours (exact times, no margin)
+// GET /api/shifts — return current global shift config (exact times, plus margin/alert)
 async function getShift(req, res) {
   try {
-    const { start, end, updatedAt } = await readGlobalShiftTime();
-    res.json({ start, end, updatedAt });
+    const data = await readGlobalShiftTime();
+    res.json(data);
   } catch (e) {
     if (e.message === "Shift hours not configured") {
       return res.status(404).json({ error: "Shift hours not configured" });
@@ -47,9 +60,10 @@ async function getShift(req, res) {
   }
 }
 
-// PUT /api/shifts — update global hours after checking ALL staff shifts (no margin)
+// PUT /api/shifts — update global hours; also allow margin/alert minutes
 async function updateShift(req, res) {
-  const { start, end } = req.body || {};
+  const { start, end, marginTime, alertTime } = req.body || {};
+
   if (!timeRe.test(start) || !timeRe.test(end)) {
     return res
       .status(400)
@@ -57,11 +71,10 @@ async function updateShift(req, res) {
   }
 
   try {
-    // 1) Validate the new global window **against existing staff allocations**
+    // 1) Validate the new global window **against existing staff allocations** (still exact/no margin here)
     const gStartMin = toMinutes(start);
     const gEndMin = toMinutes(end);
 
-    // fetch all staff with explicit shift times
     const { rows: staffRows } = await pool.query(
       `SELECT
          s.id AS staff_id,
@@ -79,12 +92,7 @@ async function updateShift(req, res) {
     for (const r of staffRows) {
       const sStartMin = toMinutes(r.shift_start);
       const sEndMin = toMinutes(r.shift_end);
-      const ok = isStaffWindowInsideGlobal(
-        gStartMin,
-        gEndMin,
-        sStartMin,
-        sEndMin
-      );
+      const ok = isStaffWindowInsideGlobal(gStartMin, gEndMin, sStartMin, sEndMin);
       if (!ok) {
         conflicts.push({
           staffId: r.staff_id,
@@ -100,23 +108,40 @@ async function updateShift(req, res) {
       return res.status(400).json({
         error:
           "Proposed global shift would conflict with existing staff shift allocations. Adjust staff shifts first, or choose a wider global window.",
-        conflicts, // lets admin see which staff to adjust
+        conflicts,
       });
     }
 
-    // 2) Apply the new global window
-    await pool.query(
-      `INSERT INTO shift_hours (id, start_local_time, end_local_time)
-         VALUES (1, $1::time, $2::time)
-         ON CONFLICT (id)
-         DO UPDATE SET start_local_time=EXCLUDED.start_local_time,
-                       end_local_time=EXCLUDED.end_local_time,
-                       updated_at=NOW()`,
-      [start, end]
-    );
+    // 2) Build dynamic update for margin/alert (optional)
+    // If marginTime/alertTime are omitted, keep existing DB values.
+    const updateSql = `
+      INSERT INTO shift_hours (id, start_local_time, end_local_time, margintime, alerttime)
+      VALUES (1, $1::time, $2::time,
+              COALESCE($3, (SELECT margintime FROM shift_hours WHERE id=1)),
+              COALESCE($4, (SELECT alerttime  FROM shift_hours WHERE id=1)))
+      ON CONFLICT (id)
+      DO UPDATE SET
+        start_local_time = EXCLUDED.start_local_time,
+        end_local_time   = EXCLUDED.end_local_time,
+        margintime       = COALESCE(EXCLUDED.margintime, shift_hours.margintime),
+        alerttime        = COALESCE(EXCLUDED.alerttime,  shift_hours.alerttime),
+        updated_at       = NOW()
+      RETURNING margintime, alerttime
+    `;
 
-    // 3) Reschedule cron to end+30
-    await rescheduleShiftLogout();
+    const { rows } = await pool.query(updateSql, [
+      start,
+      end,
+      // pass integers or null
+      Number.isInteger(marginTime) ? marginTime : null,
+      Number.isInteger(alertTime) ? alertTime : null,
+    ]);
+
+    const effectiveMargin = Number(rows[0].margintime);
+
+    // 3) Reschedule cron to end + margin
+    // (Adjust your job signature as needed — passing minutes here)
+    await rescheduleShiftLogout({ marginMinutes: effectiveMargin });
 
     res.json({ ok: true });
   } catch (e) {

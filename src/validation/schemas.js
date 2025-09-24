@@ -70,13 +70,18 @@ const staffUpdateSchema = Joi.object({
   // employeeId is NOT allowed to be updated
 }).min(1);
 
-const shiftUpdateSchema = Joi.object({
+export const shiftUpdateSchema = Joi.object({
+  // "HH:mm" or "HH:mm:ss"
   start: Joi.string()
     .pattern(/^\d{2}:\d{2}(:\d{2})?$/)
     .required(),
   end: Joi.string()
     .pattern(/^\d{2}:\d{2}(:\d{2})?$/)
     .required(),
+
+  // minutes (integers); optional in request — will keep existing if omitted
+  marginTime: Joi.number().integer().min(0).max(24 * 60).optional(),
+  alertTime: Joi.number().integer().min(0).max(24 * 60).optional(),
 });
 
 const adminRegisterStaffSchema = Joi.object({
