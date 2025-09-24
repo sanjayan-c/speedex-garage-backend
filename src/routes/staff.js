@@ -10,6 +10,7 @@ import {
   updateStaff,
   deleteStaff,
   getStaffAllowed,
+  getStaffBlocked,
 } from "../services/staff.js";
 
 const router = express.Router();
@@ -28,6 +29,8 @@ router.get("/", auth(true), requireRole("admin"), listStaff);
 
 // Get one staff record by id (admin only)
 router.get("/:id", auth(true), requireRole("admin"), getStaffById);
+
+router.get("/:id/blocked", auth(true), requireRole("admin"), getStaffBlocked);
 
 // Update a staff record (admin only)
 router.patch(

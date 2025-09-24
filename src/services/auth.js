@@ -436,7 +436,7 @@ async function registerStaffAdmin(req, res) {
 
 // PATCH /api/users/:id/block  Body: { blocked: true|false }
 async function setUserBlockedStatus(req, res) {
-  const { id } = req.params;
+  const { id } = req.params; // staff id, not user id
   const { blocked } = req.body || {};
 
   if (typeof blocked !== "boolean") {
@@ -445,13 +445,16 @@ async function setUserBlockedStatus(req, res) {
 
   try {
     const { rowCount, rows } = await pool.query(
-      `UPDATE users
+      `UPDATE users u
           SET is_blocked = $2
-        WHERE id = $1
-      RETURNING id, username, role, is_blocked`,
+        FROM staff s
+       WHERE s.id = $1
+         AND s.user_id = u.id
+      RETURNING u.id, u.username, u.role, u.is_blocked, s.id AS staff_id`,
       [id, blocked]
     );
-    if (!rowCount) return res.status(404).json({ error: "User not found" });
+
+    if (!rowCount) return res.status(404).json({ error: "Staff not found" });
 
     return res.json({
       ok: true,
@@ -463,6 +466,8 @@ async function setUserBlockedStatus(req, res) {
     res.status(500).json({ error: "Failed to update blocked status" });
   }
 }
+
+
 async function getCurrentUser(req, res) {
   try {
     const token = req.cookies?.accessToken;

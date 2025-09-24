@@ -284,11 +284,256 @@ async function hasShiftEndedForToday(userId) {
   return { ended: false, record: rec };
 }
 
+
+// GET /api/attendance?date=YYYY-MM-DD (optional)
+// If date is not provided → return all
+async function listAttendance(req, res) {
+  try {
+    const { date } = req.query;
+
+    let query = `
+      SELECT
+        ar.id,
+        ar.staff_id,
+        s.first_name,
+        s.last_name,
+        ar.attendance_date::text AS attendance_date,
+        ar.time_in,
+        ar.time_out,
+        ar.is_forced_out,
+        ar.untime_sessions,
+        ar.created_at
+      FROM attendance_records ar
+      JOIN staff s ON ar.staff_id = s.id
+    `;
+    const params = [];
+
+    if (date) {
+      query += ` WHERE ar.attendance_date = $1::date`;
+      params.push(date);
+    }
+
+    query += ` ORDER BY ar.attendance_date DESC, ar.created_at DESC`;
+
+    const { rows } = await pool.query(query, params);
+
+    const data = rows.map((r) => ({
+      ...r,
+      time_in: toToronto(r.time_in),
+      time_out: toToronto(r.time_out),
+      created_at: toToronto(r.created_at),
+      // JSONB untime_sessions stays as an array
+    }));
+
+    return res.json(data);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to fetch attendance list" });
+  }
+}
+// GET /api/attendance/summary/:staffId
+async function getStaffAttendanceSummary(req, res) {
+  const { staffId } = req.params;
+
+  try {
+    // Fetch staff details
+    const staffQ = await pool.query(
+      `SELECT id, first_name, last_name, position, joining_date
+       FROM staff
+       WHERE id = $1`,
+      [staffId]
+    );
+
+    if (!staffQ.rows.length) {
+      return res.status(404).json({ error: "Staff not found" });
+    }
+
+    const staff = staffQ.rows[0];
+
+    // Define date ranges
+    const now = DateTime.now().setZone("America/Toronto");
+    const startOfWeek = now.startOf("week").toISODate(); // Monday
+    const startOfMonth = now.startOf("month").toISODate();
+
+    // Total worked hours
+    const workedQ = await pool.query(
+      `
+      SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(time_out, NOW()) - time_in))) AS total_seconds
+      FROM attendance_records
+      WHERE staff_id = $1 AND time_in IS NOT NULL AND time_out IS NOT NULL
+    `,
+      [staffId]
+    );
+
+    const workedWeekQ = await pool.query(
+      `
+      SELECT SUM(EXTRACT(EPOCH FROM (time_out - time_in))) AS total_seconds
+      FROM attendance_records
+      WHERE staff_id = $1 AND attendance_date >= $2::date AND time_in IS NOT NULL AND time_out IS NOT NULL
+    `,
+      [staffId, startOfWeek]
+    );
+
+    const workedMonthQ = await pool.query(
+      `
+      SELECT SUM(EXTRACT(EPOCH FROM (time_out - time_in))) AS total_seconds
+      FROM attendance_records
+      WHERE staff_id = $1 AND attendance_date >= $2::date AND time_in IS NOT NULL AND time_out IS NOT NULL
+    `,
+      [staffId, startOfMonth]
+    );
+
+    // Untime sessions
+    const untimeQ = await pool.query(
+      `
+      SELECT jsonb_array_elements(untime_sessions) AS session
+      FROM attendance_records
+      WHERE staff_id = $1 AND untime_sessions IS NOT NULL
+    `,
+      [staffId]
+    );
+
+    const untimeSessions = untimeQ.rows.map((r) => {
+      const s = r.session;
+      const start = DateTime.fromISO(s.start, { setZone: true });
+      const end = DateTime.fromISO(s.end, { setZone: true });
+      const dur = Math.max(0, end.diff(start, "seconds").seconds);
+      return { start, end, dur };
+    });
+
+    const totalUnTime = untimeSessions.reduce((a, s) => a + s.dur, 0);
+    const untimeWeek = untimeSessions
+      .filter((s) => s.start >= DateTime.fromISO(startOfWeek, { zone: "America/Toronto" }))
+      .reduce((a, s) => a + s.dur, 0);
+    const untimeMonth = untimeSessions
+      .filter((s) => s.start >= DateTime.fromISO(startOfMonth, { zone: "America/Toronto" }))
+      .reduce((a, s) => a + s.dur, 0);
+
+    // Build summary
+    const summary = {
+      staff: {
+        id: staff.id,
+        firstName: staff.first_name,
+        lastName: staff.last_name,
+        email: staff.email,
+        contactNo: staff.contact_no,
+        role: staff.position,
+        joinDate: staff.joining_date ? staff.joining_date.toISOString().split("T")[0] : null,
+      },
+      worked: {
+        totalHours: +(workedQ.rows[0].total_seconds || 0) / 3600,
+        weekHours: +(workedWeekQ.rows[0].total_seconds || 0) / 3600,
+        monthHours: +(workedMonthQ.rows[0].total_seconds || 0) / 3600,
+      },
+      untime: {
+        totalHours: totalUnTime / 3600,
+        weekHours: untimeWeek / 3600,
+        monthHours: untimeMonth / 3600,
+      },
+    };
+
+    return res.json(summary);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to fetch attendance summary" });
+  }
+}
+
+
+async function getStaffAttendanceDetails(req, res) {
+  const { staffId } = req.params;
+  const { filterType, filterValue } = req.query; // filterType = day/week/month
+
+  try {
+    // Fetch staff details
+   const staffQ = await pool.query(
+      `SELECT id, first_name, last_name, position, joining_date, email, contact_no
+       FROM staff WHERE id=$1`,
+      [staffId]
+    );
+    if (!staffQ.rows.length) return res.status(404).json({ error: "Staff not found" });
+
+    const staff = staffQ.rows[0];
+
+    // Build filter clause
+    let whereClause = "WHERE ar.staff_id=$1";
+    const params = [staffId];
+
+    if (filterType && filterValue) {
+      const targetDate = DateTime.fromISO(filterValue, { zone: "America/Toronto" });
+      if (filterType === "day") {
+        whereClause += " AND ar.attendance_date = $2::date";
+        params.push(targetDate.toISODate());
+      } else if (filterType === "week") {
+        const startOfWeek = targetDate.startOf("week").toISODate();
+        const endOfWeek = targetDate.endOf("week").toISODate();
+        whereClause += " AND ar.attendance_date BETWEEN $2::date AND $3::date";
+        params.push(startOfWeek, endOfWeek);
+      } else if (filterType === "month") {
+        const startOfMonth = targetDate.startOf("month").toISODate();
+        const endOfMonth = targetDate.endOf("month").toISODate();
+        whereClause += " AND ar.attendance_date BETWEEN $2::date AND $3::date";
+        params.push(startOfMonth, endOfMonth);
+      }
+    }
+
+    // Fetch attendance records
+    const { rows } = await pool.query(
+      `SELECT id, attendance_date, time_in, time_out, untime_sessions, created_at
+       FROM attendance_records ar
+       ${whereClause}
+       ORDER BY attendance_date ASC, time_in ASC`,
+      params
+    );
+
+    // Compute worked and untime hours
+    const records = rows.map((r) => {
+      const timeIn = r.time_in ? new Date(r.time_in) : null;
+      const timeOut = r.time_out ? new Date(r.time_out) : null;
+
+      const workedSeconds = timeIn && timeOut ? Math.max(0, (timeOut - timeIn) / 1000) : 0;
+
+      const untimeSeconds = (r.untime_sessions || []).reduce((sum, u) => {
+        const start = new Date(u.start);
+        const end = new Date(u.end);
+        return sum + Math.max(0, (end - start) / 1000);
+      }, 0);
+
+      const netWorkedSeconds = Math.max(0, workedSeconds - untimeSeconds);
+
+      return {
+        ...r,
+        workedHours: +(netWorkedSeconds / 3600).toFixed(3),
+        untimeHours: +(untimeSeconds / 3600).toFixed(3),
+      };
+    });
+
+    // Summary
+    const summary = {
+      worked: { totalHours: +records.reduce((sum, r) => sum + r.workedHours, 0).toFixed(3) },
+      untime: { totalHours: +records.reduce((sum, r) => sum + r.untimeHours, 0).toFixed(3) },
+      count: records.length,
+    };
+
+    return res.json({ staff, records, summary });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to fetch attendance details" });
+  }
+}
+
+
+
+
+
 export {
   getActiveSessionQr,
   markAttendanceForStaff,
   listMyAttendance,
+  getStaffAttendanceDetails,
   timeoutAllStaff,
   appendUntimeSessionForUser,
+  getStaffAttendanceSummary,
   hasShiftEndedForToday,
+  listAttendance
 };
