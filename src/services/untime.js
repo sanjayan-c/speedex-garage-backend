@@ -387,7 +387,8 @@ async function endMyUntimeNow(req, res) {
         WHERE id = $1 AND role = 'staff'`,
       [userId]
     );
-    if (!rowCount) return res.status(404).json({ error: "Staff user not found" });
+    if (!rowCount)
+      return res.status(404).json({ error: "Staff user not found" });
 
     const urow = rows[0];
     const u = urow.untime;
@@ -429,9 +430,28 @@ async function endMyUntimeNow(req, res) {
   }
 }
 
-// Get effective shift for a user → staff-specific shift else global shift
 async function getEffectiveShiftForUser(userId) {
-  // per-staff
+  // Read global once (used for fallback and margins)
+  const { rows: gRows } = await pool.query(
+    `SELECT
+       start_local_time::text AS g_start,
+       end_local_time::text   AS g_end,
+       COALESCE(margintime, 30) AS margin_minutes,
+       COALESCE(alerttime, 10)  AS alert_minutes
+     FROM shift_hours
+     WHERE id=1`
+  );
+
+  const globalCfg = gRows.length
+    ? {
+        start_local_time: gRows[0].g_start,
+        end_local_time: gRows[0].g_end,
+        margin_minutes: Number(gRows[0].margin_minutes) || 30,
+        alert_minutes: Number(gRows[0].alert_minutes) || 10,
+      }
+    : null;
+
+  // per-staff window (we still take margins from global)
   const { rows: sRows } = await pool.query(
     `SELECT
        shift_start_local_time::text AS start_local_time,
@@ -442,14 +462,19 @@ async function getEffectiveShiftForUser(userId) {
   );
 
   if (sRows.length && sRows[0].start_local_time && sRows[0].end_local_time) {
-    return sRows[0];
+    return {
+      ...sRows[0],
+      ...(globalCfg
+        ? {
+            margin_minutes: globalCfg.margin_minutes,
+            alert_minutes: globalCfg.alert_minutes,
+          }
+        : { margin_minutes: 30, alert_minutes: 10 }),
+    };
   }
 
-  // global fallback
-  const { rows: gRows } = await pool.query(
-    "SELECT start_local_time::text AS start_local_time, end_local_time::text AS end_local_time FROM shift_hours WHERE id=1"
-  );
-  return gRows.length ? gRows[0] : null;
+  // global fallback (with margins)
+  return globalCfg;
 }
 
 // Enforce shift/leave rules for staff and mark UnTime if outside
@@ -495,18 +520,18 @@ async function enforceStaffUntimeWindow(userId, username, role) {
       [userId]
     );
     const {
-  rows: [u],
-} = await pool.query(
-  "SELECT untime, untime_approved FROM users WHERE id=$1",
-  [userId]
-);
+      rows: [u],
+    } = await pool.query(
+      "SELECT untime, untime_approved FROM users WHERE id=$1",
+      [userId]
+    );
     return {
       skipped: false,
       ended: true,
       reason: "ended",
       nowTorontoISO: nowIso,
       untimeActive: u.untime?.active === true,
-  untimeApproved: u.untime_approved,
+      untimeApproved: u.untime_approved,
     };
   }
 
@@ -540,18 +565,18 @@ async function enforceStaffUntimeWindow(userId, username, role) {
       [userId]
     );
     const {
-  rows: [u],
-} = await pool.query(
-  "SELECT untime, untime_approved FROM users WHERE id=$1",
-  [userId]
-);
+      rows: [u],
+    } = await pool.query(
+      "SELECT untime, untime_approved FROM users WHERE id=$1",
+      [userId]
+    );
     return {
       skipped: false,
       reason: "on-leave",
       nowTorontoISO: nowIso,
       leave: leaveStatus.leave,
       untimeActive: u.untime?.active === true,
-  untimeApproved: u.untime_approved,
+      untimeApproved: u.untime_approved,
     };
   }
 
@@ -559,7 +584,11 @@ async function enforceStaffUntimeWindow(userId, username, role) {
   const shift = await getEffectiveShiftForUser(userId);
   if (!shift) return { skipped: true, reason: "no-shift" };
 
-  const { windowStart, windowEnd } = buildShiftWindowToronto(shift);
+  const margin = Number(shift.margin_minutes) || 30; // from DB
+  const { windowStart, windowEnd } = buildShiftWindowToronto(shift, {
+    marginMinutes: margin,
+  });
+
   const nowTor = nowToronto();
   const outside = !isInWindow(nowTor, windowStart, windowEnd);
 
@@ -590,11 +619,11 @@ async function enforceStaffUntimeWindow(userId, username, role) {
       [userId]
     );
     const {
-  rows: [u],
-} = await pool.query(
-  "SELECT untime, untime_approved FROM users WHERE id=$1",
-  [userId]
-);
+      rows: [u],
+    } = await pool.query(
+      "SELECT untime, untime_approved FROM users WHERE id=$1",
+      [userId]
+    );
     return {
       outside: true,
       reason: "outside-window",
@@ -602,7 +631,7 @@ async function enforceStaffUntimeWindow(userId, username, role) {
       windowStartISO: windowStart.toISO(),
       windowEndISO: windowEnd.toISO(),
       untimeActive: u.untime?.active === true,
-  untimeApproved: u.untime_approved,
+      untimeApproved: u.untime_approved,
     };
   }
 

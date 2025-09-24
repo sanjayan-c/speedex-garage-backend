@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE
   IF NOT EXISTS users (
@@ -62,9 +63,9 @@ ALTER TABLE leave_requests
   ALTER COLUMN start_date TYPE TIMESTAMPTZ USING start_date::timestamptz,
   ALTER COLUMN end_date TYPE TIMESTAMPTZ USING end_date::timestamptz;
 
-ALTER TABLE  IF NOT EXISTS staff
-ADD COLUMN IF NOT EXISTS shift_start_local_time TIME NULL,
-ADD COLUMN IF NOT EXISTS shift_end_local_time TIME NULL;
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS shift_start_local_time TIME NULL,
+  ADD COLUMN IF NOT EXISTS shift_end_local_time TIME NULL;
 
 ALTER TABLE users
 ADD COLUMN IF NOT EXISTS untime_approved BOOLEAN NOT NULL DEFAULT false;

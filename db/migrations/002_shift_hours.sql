@@ -6,7 +6,12 @@ CREATE TABLE IF NOT EXISTS shift_hours (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- seed a default (9:00–17:00) if missing
-INSERT INTO shift_hours (id, start_local_time, end_local_time)
-VALUES (1, '09:00:00'::time, '17:00:00'::time)
+-- add new columns with defaults
+ALTER TABLE shift_hours
+  ADD COLUMN IF NOT EXISTS margintime INTEGER NOT NULL DEFAULT 30,  -- minutes
+  ADD COLUMN IF NOT EXISTS alerttime  INTEGER NOT NULL DEFAULT 10;  -- minutes
+
+-- if table might be empty, keep the seed insert covering new cols too
+INSERT INTO shift_hours (id, start_local_time, end_local_time, margintime, alerttime)
+VALUES (1, '09:00:00'::time, '17:00:00'::time, 30, 10)
 ON CONFLICT (id) DO NOTHING;
