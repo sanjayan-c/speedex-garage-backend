@@ -7,6 +7,9 @@ import {
   markAttendanceForStaff,
   listMyAttendance,
   timeoutAllStaff,
+  listAttendance,
+  getStaffAttendanceSummary,
+  getStaffAttendanceDetails,
 } from "../services/attendance.js";
 import { attendanceMarkSchema } from "../validation/schemas.js";
 
@@ -20,6 +23,9 @@ router.post("/mark", auth(), requireRole("staff"), validate(attendanceMarkSchema
 
 // List the authenticated staff member’s recent attendance records
 router.get("/me", auth(), requireRole("staff"), listMyAttendance);
+router.get("/", auth(), requireRole("admin"), listAttendance);
+router.get("/summary/:staffId", auth(), requireRole("admin"), getStaffAttendanceSummary);
+router.get("/staff/:staffId/details", getStaffAttendanceDetails);
 
 // Force time_out for all staff who have IN but not OUT today (Toronto),
 router.post(

@@ -329,12 +329,37 @@ async function getStaffAllowed(req, res) {
   }
 }
 
+async function getStaffBlocked(req, res) {
+  const staffId = req.params.id;
+
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT u.is_blocked
+      FROM staff s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.id = $1
+      `,
+      [staffId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Staff not found" });
+    }
+
+    res.json({ blocked: rows[0].is_blocked });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch Bloced status" });
+  }
+}
 
 export {
   createStaff,
   listStaff,
   getStaffAllowed,
   getStaffById,
+  getStaffBlocked,
   updateStaff,
   deleteStaff,
   assertStaffShiftWithinGlobal,
