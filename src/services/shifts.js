@@ -1,7 +1,8 @@
 // src/services/shifts.js
 import { pool } from "../utils/db.js";
-import { rescheduleShiftLogout } from "../jobs/shiftLogout.js";
 import { isStaffWindowInsideGlobal } from "../services/staff.js";
+import { rescheduleShiftLogout } from "../jobs/shiftLogout.js";
+import { rescheduleShiftAlert } from "../jobs/shiftAlert.js";
 
 /* ---------------- helpers for time-window checks ---------------- */
 
@@ -92,7 +93,12 @@ async function updateShift(req, res) {
     for (const r of staffRows) {
       const sStartMin = toMinutes(r.shift_start);
       const sEndMin = toMinutes(r.shift_end);
-      const ok = isStaffWindowInsideGlobal(gStartMin, gEndMin, sStartMin, sEndMin);
+      const ok = isStaffWindowInsideGlobal(
+        gStartMin,
+        gEndMin,
+        sStartMin,
+        sEndMin
+      );
       if (!ok) {
         conflicts.push({
           staffId: r.staff_id,
@@ -142,7 +148,9 @@ async function updateShift(req, res) {
     // 3) Reschedule cron to end + margin
     // (Adjust your job signature as needed — passing minutes here)
     await rescheduleShiftLogout({ marginMinutes: effectiveMargin });
-
+    await rescheduleShiftLogout();
+    await rescheduleShiftAlert();
+    
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
