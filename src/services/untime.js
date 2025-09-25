@@ -10,6 +10,7 @@ import {
   appendUntimeSessionForUser,
 } from "./attendance.js";
 import { DateTime } from "luxon";
+import { v4 as uuidv4 } from "uuid";
 
 // GET /api/untime  → ALL users on UnTime (active), approved or not
 async function listUntimeUsers(req, res) {
@@ -663,6 +664,103 @@ async function enforceStaffUntimeWindow(userId, username, role) {
   };
 }
 
+// POST /api/untime/extend  { minutes: 1..60 }
+async function extendUnTimeForSelf(req, res) {
+  try {
+    let { minutes } = req.body || {};
+    minutes = Number(minutes);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) {
+      return res
+        .status(400)
+        .json({ error: "minutes must be an integer between 1 and 60" });
+    }
+
+    const userId = req.user.sub; // from JWT
+    // find staff id for this user
+    const { rows: sRows } = await pool.query(
+      "SELECT id FROM staff WHERE user_id=$1",
+      [userId]
+    );
+    if (!sRows.length)
+      return res.status(404).json({ error: "Staff record not found" });
+    const staffId = sRows[0].id;
+
+    const torNow = DateTime.now().setZone("America/Toronto");
+    const today = torNow.toISODate();
+    const nowTs = torNow.toJSDate(); // DB timestamptz
+
+    // ensure attendance row exists
+    await pool.query(
+      `INSERT INTO attendance_records (id, staff_id, attendance_date)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (staff_id, attendance_date) DO NOTHING`,
+      [uuidv4(), staffId, today]
+    );
+
+    // fetch it
+    const {
+      rows: [rec],
+    } = await pool.query(
+      "SELECT * FROM attendance_records WHERE staff_id=$1 AND attendance_date=$2",
+      [staffId, today]
+    );
+
+    // mark OUT now if not already out
+    if (!rec.time_out) {
+      // (if no time_in, we still allow OUT to create a closed session)
+      await pool.query(
+        "UPDATE attendance_records SET time_out=$1 WHERE staff_id=$2 AND attendance_date=$3",
+        [nowTs, staffId, today]
+      );
+    }
+
+    // set UnTime JSON (start now, for 'minutes')
+    // Keep same flags you already use elsewhere: active=true, approved=false, allowed=true
+    await pool.query(
+      `UPDATE users
+         SET untime = jsonb_set(
+                        jsonb_set(
+                          jsonb_set(COALESCE(untime,'{}'::jsonb), '{active}', 'true'::jsonb, true),
+                          '{reason}', to_jsonb('manual-extend'::text), true
+                        ),
+                        '{startTime}', to_jsonb($1::timestamptz::text), true
+                      ),
+             untime_approved = false,
+             allowed = true
+       WHERE id = $2`,
+      [nowTs, userId]
+    );
+
+    // set the duration (minutes)
+    await pool.query(
+      `UPDATE users
+         SET untime = jsonb_set(untime, '{durationMinutes}', to_jsonb($2::int), true)
+       WHERE id = $1`,
+      [userId, minutes]
+    );
+
+    // return a summary
+    const {
+      rows: [u],
+    } = await pool.query(
+      "SELECT id, username, untime, untime_approved, allowed FROM users WHERE id=$1",
+      [userId]
+    );
+
+    return res.json({
+      ok: true,
+      outAt: nowTs,
+      durationMinutes: minutes,
+      untime: u.untime,
+      untimeApproved: u.untime_approved,
+      allowed: u.allowed,
+    });
+  } catch (err) {
+    console.error("[untime.extend] failed:", err);
+    res.status(500).json({ error: "Failed to extend UnTime" });
+  }
+}
+
 export {
   listPendingUntime,
   listUntimeUsers,
@@ -672,4 +770,5 @@ export {
   endMyUntimeNow,
   getEffectiveShiftForUser,
   enforceStaffUntimeWindow,
+  extendUnTimeForSelf,
 };

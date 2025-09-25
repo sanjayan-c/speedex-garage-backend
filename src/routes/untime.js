@@ -9,6 +9,7 @@ import {
   setUntimeStatusForUser,
   setUntimeStatusForAllWorkingNow,
   endMyUntimeNow,
+  extendUnTimeForSelf,
 } from "../services/untime.js";
 import {
   untimeStartSchema,
@@ -64,5 +65,8 @@ router.patch(
 
 // End own untime shift 
 router.post("/end-self", auth(), requireRole("staff"), endMyUntimeNow);
+
+// Extend untime after attendance
+router.post("/extend", auth(true), requireRole("staff"), extendUnTimeForSelf);
 
 export default router;
