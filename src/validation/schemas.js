@@ -162,6 +162,7 @@ export {
   staffUpdateSchema,
   adminRegisterStaffSchema,
   untimeStartSchema,
+  shiftUpdateSchema,
   untimeDurationSchema,
   leaveCreateSchema,
   leaveUpdateSchema,
