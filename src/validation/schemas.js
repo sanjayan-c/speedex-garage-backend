@@ -160,7 +160,6 @@ export {
   passwordUpdateSchema,
   staffCreateSchema,
   staffUpdateSchema,
-  shiftUpdateSchema,
   adminRegisterStaffSchema,
   untimeStartSchema,
   untimeDurationSchema,

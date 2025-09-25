@@ -331,6 +331,7 @@ async function listAttendance(req, res) {
     return res.status(500).json({ error: "Failed to fetch attendance list" });
   }
 }
+
 // GET /api/attendance/summary/:staffId
 async function getStaffAttendanceSummary(req, res) {
   const { staffId } = req.params;
@@ -479,7 +480,7 @@ async function getStaffAttendanceDetails(req, res) {
 
     // Fetch attendance records
     const { rows } = await pool.query(
-      `SELECT id, attendance_date, time_in, time_out, untime_sessions, created_at
+      `SELECT id, attendance_date, time_in, time_out, untime_sessions, created_at, is_forced_out
        FROM attendance_records ar
        ${whereClause}
        ORDER BY attendance_date ASC, time_in ASC`,
@@ -522,7 +523,74 @@ async function getStaffAttendanceDetails(req, res) {
   }
 }
 
+// PATCH /api/attendance/:attendanceId
+async function updateAttendanceRecord(req, res) {
+  const { attendanceId } = req.params;
+  const { time_in, time_out } = req.body;
 
+  try {
+    // Validate inputs
+    if (!time_in && !time_out) {
+      return res.status(400).json({ error: "At least one of time_in or time_out must be provided" });
+    }
+
+    const timeInDate = time_in ? new Date(time_in) : null;
+    const timeOutDate = time_out ? new Date(time_out) : null;
+
+    // Validate date format
+    if ((time_in && isNaN(timeInDate.getTime())) || (time_out && isNaN(timeOutDate.getTime()))) {
+      return res.status(400).json({ error: "Invalid date format. Provide a valid ISO string." });
+    }
+
+    // Validate start/end relationship
+    if (timeInDate && timeOutDate && timeOutDate <= timeInDate) {
+      return res.status(400).json({ error: "time_out must be after time_in" });
+    }
+
+    // Build update fields
+    const fields = [];
+    const values = [];
+    let idx = 1;
+
+    if (timeInDate) {
+      fields.push(`time_in = $${idx++}`);
+      values.push(timeInDate);
+    }
+    if (timeOutDate) {
+      fields.push(`time_out = $${idx++}`);
+      values.push(timeOutDate);
+    }
+
+    values.push(attendanceId); // last param for WHERE clause
+
+    const query = `
+      UPDATE attendance_records
+      SET ${fields.join(", ")}
+      WHERE id = $${idx}
+      RETURNING id, staff_id, attendance_date, time_in, time_out, created_at
+    `;
+
+    const { rows } = await pool.query(query, values);
+    if (!rows.length) {
+      return res.status(404).json({ error: "Attendance record not found" });
+    }
+
+    const updated = rows[0];
+
+    return res.json({
+      ok: true,
+      attendance: {
+        ...updated,
+        time_in: toToronto(updated.time_in),
+        time_out: toToronto(updated.time_out),
+        created_at: toToronto(updated.created_at),
+      },
+    });
+  } catch (err) {
+    console.error("updateAttendanceRecord failed:", err);
+    return res.status(500).json({ error: "Failed to update attendance record" });
+  }
+}
 
 
 
@@ -535,5 +603,6 @@ export {
   appendUntimeSessionForUser,
   getStaffAttendanceSummary,
   hasShiftEndedForToday,
+  updateAttendanceRecord,
   listAttendance
 };

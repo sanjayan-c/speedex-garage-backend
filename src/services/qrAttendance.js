@@ -62,12 +62,20 @@ export async function markAttendance(staffId, sessionCode, markType = "in") {
   }
 
   // resolve the user (to pass into enforcement)
+  // const { rows: uRows } = await pool.query(
+  //   `SELECT u.id AS user_id, u.username, u.role
+  //      FROM staff s JOIN users u ON s.user_id = u.id
+  //     WHERE s.id = $1`,
+  //   [staffId]
+  // );
   const { rows: uRows } = await pool.query(
-    `SELECT u.id AS user_id, u.username, u.role
-       FROM staff s JOIN users u ON s.user_id = u.id
-      WHERE s.id = $1`,
-    [staffId]
-  );
+  `SELECT u.id AS user_id, u.username, u.role,
+          s.shift_start_local_time, s.shift_end_local_time
+     FROM staff s JOIN users u ON s.user_id = u.id
+    WHERE s.id = $1`,
+  [staffId]
+);
+
   if (!uRows.length) throw new Error("Staff or User not found");
   const user = uRows[0];
 
@@ -141,27 +149,81 @@ if (diag && !diag.skipped) {
     [staffId, today]
   );
 
+  // if (markType === "in") {
+  //   if (rec.time_in) throw new Error("Already marked IN for today");
+  //   await pool.query(
+  //     "UPDATE attendance_records SET time_in=$1 WHERE staff_id=$2 AND attendance_date=$3",
+  //     [nowTs, staffId, today]
+  //   );
+  //   await pool.query("UPDATE users SET allowed = true WHERE id = $1", [
+  //     user.user_id,
+  //   ]);
+  // } else {
+  //   // markType === "out"
+  //   if (rec.time_out) throw new Error("Already marked OUT for today");
+  //   if (!rec.time_in) throw new Error("Cannot mark OUT before IN");
+  //   await pool.query(
+  //     "UPDATE attendance_records SET time_out=$1 WHERE staff_id=$2 AND attendance_date=$3",
+  //     [nowTs, staffId, today]
+  //   );
+  //   await pool.query("UPDATE users SET allowed = false WHERE id = $1", [
+  //     user.user_id,
+  //   ]);
+  // }
   if (markType === "in") {
-    if (rec.time_in) throw new Error("Already marked IN for today");
-    await pool.query(
-      "UPDATE attendance_records SET time_in=$1 WHERE staff_id=$2 AND attendance_date=$3",
-      [nowTs, staffId, today]
-    );
-    await pool.query("UPDATE users SET allowed = true WHERE id = $1", [
-      user.user_id,
-    ]);
-  } else {
-    // markType === "out"
-    if (rec.time_out) throw new Error("Already marked OUT for today");
-    if (!rec.time_in) throw new Error("Cannot mark OUT before IN");
-    await pool.query(
-      "UPDATE attendance_records SET time_out=$1 WHERE staff_id=$2 AND attendance_date=$3",
-      [nowTs, staffId, today]
-    );
-    await pool.query("UPDATE users SET allowed = false WHERE id = $1", [
-      user.user_id,
-    ]);
+  if (rec.time_in) throw new Error("Already marked IN for today");
+
+  // --- SHIFT GRACE ADJUSTMENT FOR LATE START ---
+  let adjustedIn = DateTime.now().setZone("America/Toronto");
+  const shiftStart = user.shift_start_local_time; // ✅ fixed
+
+  if (shiftStart) {
+    const shiftStartToday = DateTime.fromISO(today + "T" + shiftStart, {
+      zone: "America/Toronto",
+    });
+
+    // If staff is late → round forward 10 minutes
+    if (adjustedIn > shiftStartToday) {
+      adjustedIn = adjustedIn.plus({ minutes: 10 });
+    }
   }
+
+  await pool.query(
+    "UPDATE attendance_records SET time_in=$1 WHERE staff_id=$2 AND attendance_date=$3",
+    [adjustedIn.toISO(), staffId, today]
+  );
+  await pool.query("UPDATE users SET allowed = true WHERE id = $1", [
+    user.user_id,
+  ]);
+} else {
+  // markType === "out"
+  if (rec.time_out) throw new Error("Already marked OUT for today");
+  if (!rec.time_in) throw new Error("Cannot mark OUT before IN");
+
+  // --- SHIFT GRACE ADJUSTMENT FOR EARLY LEAVE ---
+  let adjustedOut = DateTime.now().setZone("America/Toronto");
+  const shiftEnd = user.shift_end_local_time; // ✅ fixed
+
+  if (shiftEnd) {
+    const shiftEndToday = DateTime.fromISO(today + "T" + shiftEnd, {
+      zone: "America/Toronto",
+    });
+
+    // If staff leaves early → round back 10 minutes
+    if (adjustedOut < shiftEndToday) {
+      adjustedOut = adjustedOut.minus({ minutes: 10 });
+    }
+  }
+
+  await pool.query(
+    "UPDATE attendance_records SET time_out=$1 WHERE staff_id=$2 AND attendance_date=$3",
+    [adjustedOut.toISO(), staffId, today]
+  );
+  await pool.query("UPDATE users SET allowed = false WHERE id = $1", [
+    user.user_id,
+  ]);
+}
+
 
   const {
     rows: [updated],

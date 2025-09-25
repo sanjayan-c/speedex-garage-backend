@@ -10,6 +10,7 @@ import {
   listAttendance,
   getStaffAttendanceSummary,
   getStaffAttendanceDetails,
+  updateAttendanceRecord,
 } from "../services/attendance.js";
 import { attendanceMarkSchema } from "../validation/schemas.js";
 
@@ -27,6 +28,7 @@ router.get("/", auth(), requireRole("admin"), listAttendance);
 router.get("/summary/:staffId", auth(), requireRole("admin"), getStaffAttendanceSummary);
 router.get("/staff/:staffId/details", getStaffAttendanceDetails);
 
+router.patch("/:attendanceId", auth(), requireRole("admin"), updateAttendanceRecord);
 // Force time_out for all staff who have IN but not OUT today (Toronto),
 router.post(
   "/force-timeout-staff",
