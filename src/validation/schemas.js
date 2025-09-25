@@ -70,7 +70,7 @@ const staffUpdateSchema = Joi.object({
   // employeeId is NOT allowed to be updated
 }).min(1);
 
-export const shiftUpdateSchema = Joi.object({
+const shiftUpdateSchema = Joi.object({
   // "HH:mm" or "HH:mm:ss"
   start: Joi.string()
     .pattern(/^\d{2}:\d{2}(:\d{2})?$/)
