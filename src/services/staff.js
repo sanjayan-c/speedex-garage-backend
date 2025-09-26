@@ -5,6 +5,7 @@ import bcrypt from "bcrypt";
 import { readGlobalShiftTime } from "../services/shifts.js";
 // src/services/staff.js
 import { uploadToDrive } from "../middleware/driveUpload.js"; // your Drive helper
+import { toToronto } from "../utils/time.js";
 
 // Upload multiple staff documents
 async function uploadStaffDocuments(staffId, files) {
@@ -46,6 +47,21 @@ const timeRe = /^\d{2}:\d{2}(:\d{2})?$/;
 function toMinutes(t) {
   const [h, m, s] = t.split(":").map(Number);
   return h * 60 + (m ?? 0) + (s ? s / 60 : 0);
+}
+
+function getActorId(req) {
+  // Your auth middleware already populates req.user from the cookie (per your reference).
+  const id = req?.user?.sub || req?.user?.id || req?.cookies?.userId || null;
+
+  // Soft UUID v4 check — keep, relax, or replace to match your ID format.
+  const uuidV4 =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  if (!id /* || !uuidV4.test(id) */) {
+    // If your users.id is NOT uuid v4, remove the regex check above.
+    throw new Error("Missing acting user id (cookie)");
+  }
+  return id;
 }
 
 function isStaffWindowInsideGlobal(gStartMin, gEndMin, sStartMin, sEndMin) {
@@ -139,6 +155,8 @@ async function createStaff(req, res) {
   } = req.body;
 
   try {
+    const actorId = getActorId(req);
+
     if (managerId) {
       const { rowCount } = await pool.query(
         "SELECT 1 FROM staff WHERE id = $1",
@@ -158,26 +176,37 @@ async function createStaff(req, res) {
 
     await assertWeeklyShiftsWithinGlobal(startWeek, endWeek);
 
+    // Normalize contactNo to an array for TEXT[]
+    const contactArray = Array.isArray(contactNo)
+      ? contactNo.filter((v) => v !== undefined)
+      : contactNo
+      ? [contactNo]
+      : [];
+
     const id = uuidv4();
     const { rows } = await pool.query(
       `INSERT INTO staff (
          id, user_id, first_name, last_name, email, contact_no, emergency_contact_no,
          shift_start_local_time, shift_end_local_time,
-         birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family
+         birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family,
+         created_by, updated_by
        )
        VALUES (
-         $1,$2,$3,$4,$5,$6,$7,
+         $1,$2,$3,$4,$5,$6::text[],$7,
          $8::time[], $9::time[],
-         $10::date, $11::date, $12, $13, $14, $15, $16
+         $10::date, $11::date, $12, $13, $14, $15, $16,
+         $17, $18
        )
-       RETURNING employee_id, birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family`,
+       RETURNING employee_id, birthday, joining_date, leave_taken, total_leaves,
+                 position, manager_id, job_family,
+                 created_by, updated_by, created_at, updated_at`,
       [
         id,
         userId,
         firstName,
         lastName,
         email,
-        contactNo,
+        contactArray,
         emergencyContactNo,
         startWeek,
         endWeek,
@@ -188,6 +217,8 @@ async function createStaff(req, res) {
         position ?? null,
         managerId ?? null,
         jobFamily ?? null,
+        actorId,
+        actorId,
       ]
     );
 
@@ -199,7 +230,7 @@ async function createStaff(req, res) {
       firstName,
       lastName,
       email,
-      contactNo,
+      contactNo: contactArray,
       emergencyContactNo,
       shiftStart: startWeek,
       shiftEnd: endWeek,
@@ -210,6 +241,10 @@ async function createStaff(req, res) {
       position: ret.position,
       managerId: ret.manager_id,
       jobFamily: ret.job_family,
+      createdBy: ret.created_by,
+      updatedBy: ret.updated_by,
+      createdAt: ret.created_at,
+      updatedAt: ret.updated_at,
     });
   } catch (err) {
     if (err.code === "23505")
@@ -224,10 +259,28 @@ async function createStaff(req, res) {
 // GET /api/staff
 async function listStaff(req, res) {
   try {
-    const { rows } = await pool.query(
-      "SELECT * FROM staff ORDER BY created_at DESC"
-    );
-    res.json(rows);
+    const { rows } = await pool.query(`
+      SELECT
+        s.*,
+        cu.username AS created_by_name,
+        uu.username AS updated_by_name
+      FROM staff s
+      LEFT JOIN users cu ON cu.id = s.created_by
+      LEFT JOIN users uu ON uu.id = s.updated_by
+      ORDER BY s.created_at DESC
+    `);
+
+    const shaped = rows.map((r) => ({
+      ...r,
+      // Convert timestamps to Toronto ISO
+      created_at: toToronto(r.created_at),
+      updated_at: toToronto(r.updated_at),
+      // Add friendly names (keep raw IDs too)
+      created_by_name: r.created_by_name ?? null,
+      updated_by_name: r.updated_by_name ?? null,
+    }));
+
+    res.json(shaped);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch staff" });
@@ -237,11 +290,28 @@ async function listStaff(req, res) {
 // GET /api/staff/:id
 async function getStaffById(req, res) {
   try {
-    const { rows } = await pool.query("SELECT * FROM staff WHERE id=$1", [
-      req.params.id,
-    ]);
+    const { rows } = await pool.query(
+      `
+      SELECT
+        s.*,
+        cu.username AS created_by_name,
+       uu.username AS updated_by_name
+      FROM staff s
+      LEFT JOIN users cu ON cu.id = s.created_by
+      LEFT JOIN users uu ON uu.id = s.updated_by
+      WHERE s.id = $1
+      `,
+      [req.params.id]
+    );
     if (!rows.length) return res.status(404).json({ error: "Not found" });
-    res.json(rows[0]);
+    const r = rows[0];
+    res.json({
+      ...r,
+      created_at: toToronto(r.created_at),
+      updated_at: toToronto(r.updated_at),
+      created_by_name: r.created_by_name ?? null,
+      updated_by_name: r.updated_by_name ?? null,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch staff" });
@@ -253,8 +323,13 @@ async function updateStaff(req, res) {
   const updates = req.body;
 
   try {
-    const hasStart = Object.prototype.hasOwnProperty.call(updates, "shiftStart");
-    const hasEnd   = Object.prototype.hasOwnProperty.call(updates, "shiftEnd");
+    const actorId = getActorId(req);
+
+    const hasStart = Object.prototype.hasOwnProperty.call(
+      updates,
+      "shiftStart"
+    );
+    const hasEnd = Object.prototype.hasOwnProperty.call(updates, "shiftEnd");
 
     let startWeek, endWeek;
     if (hasStart || hasEnd) {
@@ -264,17 +339,25 @@ async function updateStaff(req, res) {
         });
       }
       startWeek = updates.shiftStart;
-      endWeek   = updates.shiftEnd;
+      endWeek = updates.shiftEnd;
       await assertWeeklyShiftsWithinGlobal(startWeek, endWeek);
     }
 
     // managerId checks
     if (Object.prototype.hasOwnProperty.call(updates, "managerId")) {
       if (updates.managerId) {
-        const { rowCount } = await pool.query("SELECT 1 FROM staff WHERE id=$1", [updates.managerId]);
-        if (!rowCount) return res.status(400).json({ error: "managerId must be an existing staff id" });
+        const { rowCount } = await pool.query(
+          "SELECT 1 FROM staff WHERE id=$1",
+          [updates.managerId]
+        );
+        if (!rowCount)
+          return res
+            .status(400)
+            .json({ error: "managerId must be an existing staff id" });
         if (updates.managerId === req.params.id) {
-          return res.status(400).json({ error: "A staff member cannot be their own manager" });
+          return res
+            .status(400)
+            .json({ error: "A staff member cannot be their own manager" });
         }
       }
     }
@@ -313,21 +396,38 @@ async function updateStaff(req, res) {
       } else if (key === "birthday" || key === "joiningDate") {
         fields.push(`${col}=$${idx++}::date`);
         params.push(value ?? null);
+      } else if (key === "contactNo") {
+        const contactArray = Array.isArray(value)
+          ? value.filter((v) => v !== undefined)
+          : value
+          ? [value]
+          : [];
+        fields.push(`${col}=$${idx++}::text[]`);
+        params.push(contactArray);
       } else {
         fields.push(`${col}=$${idx++}`);
         params.push(value);
       }
     }
 
-    if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
+    if (!fields.length)
+      return res.status(400).json({ error: "No valid fields to update" });
+
+    // Always set updated_by from cookie
+    fields.push(`updated_by=$${idx++}`);
+    params.push(actorId);
 
     params.push(req.params.id);
-    const { rowCount } = await pool.query(`UPDATE staff SET ${fields.join(", ")} WHERE id=$${idx}`, params);
+    const { rowCount } = await pool.query(
+      `UPDATE staff SET ${fields.join(", ")} WHERE id=$${idx}`,
+      params
+    );
     if (!rowCount) return res.status(404).json({ error: "Not found" });
 
     res.json({ ok: true });
   } catch (err) {
-    if (err.code === "23505") return res.status(409).json({ error: "Email must be unique" });
+    if (err.code === "23505")
+      return res.status(409).json({ error: "Email must be unique" });
     console.error(err);
     res.status(500).json({ error: err.message || "Failed to update staff" });
   }

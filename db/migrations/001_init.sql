@@ -312,95 +312,204 @@
 --   ADD COLUMN IF NOT EXISTS allowed    BOOLEAN NOT NULL DEFAULT false,
 --   ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT false;
 
-ALTER TABLE staff
-ADD COLUMN IF NOT EXISTS documents TEXT[] DEFAULT '{}';
-
-
--- === Convert single TIME columns → TIME[] with 7 elements (Mon..Sun) ===
-DO $$
-DECLARE
-  start_udt text;
-  end_udt   text;
-BEGIN
-  -- Detect current types
-  SELECT data_type INTO start_udt
-  FROM information_schema.columns
-  WHERE table_name = 'staff' AND column_name = 'shift_start_local_time';
-
-  SELECT data_type INTO end_udt
-  FROM information_schema.columns
-  WHERE table_name = 'staff' AND column_name = 'shift_end_local_time';
-
-  -- If start is scalar TIME, convert to TIME[]
-  IF start_udt = 'time without time zone' THEN
-    ALTER TABLE staff
-      ALTER COLUMN shift_start_local_time TYPE time[] USING (
-        CASE
-          WHEN shift_start_local_time IS NULL THEN ARRAY[]::time[]
-          ELSE array_fill(shift_start_local_time, ARRAY[7])
-        END
-      );
-  END IF;
-
-  -- If end is scalar TIME, convert to TIME[]
-  IF end_udt = 'time without time zone' THEN
-    ALTER TABLE staff
-      ALTER COLUMN shift_end_local_time TYPE time[] USING (
-        CASE
-          WHEN shift_end_local_time IS NULL THEN ARRAY[]::time[]
-          ELSE array_fill(shift_end_local_time, ARRAY[7])
-        END
-      );
-  END IF;
-END$$;
-
--- === Ensure arrays have exactly 7 elements (or are NULL) ===
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'staff_shift_start_len7_chk'
-      AND conrelid = 'staff'::regclass
-  ) THEN
-    ALTER TABLE staff
-      ADD CONSTRAINT staff_shift_start_len7_chk
-      CHECK (shift_start_local_time IS NULL OR array_length(shift_start_local_time, 1) = 7);
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'staff_shift_end_len7_chk'
-      AND conrelid = 'staff'::regclass
-  ) THEN
-    ALTER TABLE staff
-      ADD CONSTRAINT staff_shift_end_len7_chk
-      CHECK (shift_end_local_time IS NULL OR array_length(shift_end_local_time, 1) = 7);
-  END IF;
-END$$;
-
--- Optional: set NULL default (app fills); or uncomment a 7-null default
--- ALTER TABLE staff ALTER COLUMN shift_start_local_time SET DEFAULT ARRAY[
---   NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time
--- ];
--- ALTER TABLE staff ALTER COLUMN shift_end_local_time SET DEFAULT ARRAY[
---   NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time
--- ];
-
--- Optional: add column comments with index mapping (1..7 = Mon..Sun)
-COMMENT ON COLUMN staff.shift_start_local_time IS
-  'Weekly shift starts as TIME[7], indexes 1..7 = Mon..Sun (local time).';
-COMMENT ON COLUMN staff.shift_end_local_time IS
-  'Weekly shift ends   as TIME[7], indexes 1..7 = Mon..Sun (local time).';
-  
 -- ALTER TABLE staff
 -- ADD COLUMN IF NOT EXISTS documents TEXT[] DEFAULT '{}';
 
--- 4) Add additional columns (idempotent)
-ALTER TABLE leave_requests
-  ADD COLUMN IF NOT EXISTS note TEXT;
 
-ALTER TABLE leave_requests
-  ADD COLUMN IF NOT EXISTS approved_by UUID REFERENCES users(id) ON DELETE SET NULL;
+-- -- === Convert single TIME columns → TIME[] with 7 elements (Mon..Sun) ===
+-- DO $$
+-- DECLARE
+--   start_udt text;
+--   end_udt   text;
+-- BEGIN
+--   -- Detect current types
+--   SELECT data_type INTO start_udt
+--   FROM information_schema.columns
+--   WHERE table_name = 'staff' AND column_name = 'shift_start_local_time';
 
-ALTER TABLE leave_requests
-  ADD COLUMN IF NOT EXISTS updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
+--   SELECT data_type INTO end_udt
+--   FROM information_schema.columns
+--   WHERE table_name = 'staff' AND column_name = 'shift_end_local_time';
+
+--   -- If start is scalar TIME, convert to TIME[]
+--   IF start_udt = 'time without time zone' THEN
+--     ALTER TABLE staff
+--       ALTER COLUMN shift_start_local_time TYPE time[] USING (
+--         CASE
+--           WHEN shift_start_local_time IS NULL THEN ARRAY[]::time[]
+--           ELSE array_fill(shift_start_local_time, ARRAY[7])
+--         END
+--       );
+--   END IF;
+
+--   -- If end is scalar TIME, convert to TIME[]
+--   IF end_udt = 'time without time zone' THEN
+--     ALTER TABLE staff
+--       ALTER COLUMN shift_end_local_time TYPE time[] USING (
+--         CASE
+--           WHEN shift_end_local_time IS NULL THEN ARRAY[]::time[]
+--           ELSE array_fill(shift_end_local_time, ARRAY[7])
+--         END
+--       );
+--   END IF;
+-- END$$;
+
+-- -- === Ensure arrays have exactly 7 elements (or are NULL) ===
+-- DO $$
+-- BEGIN
+--   IF NOT EXISTS (
+--     SELECT 1 FROM pg_constraint
+--     WHERE conname = 'staff_shift_start_len7_chk'
+--       AND conrelid = 'staff'::regclass
+--   ) THEN
+--     ALTER TABLE staff
+--       ADD CONSTRAINT staff_shift_start_len7_chk
+--       CHECK (shift_start_local_time IS NULL OR array_length(shift_start_local_time, 1) = 7);
+--   END IF;
+
+--   IF NOT EXISTS (
+--     SELECT 1 FROM pg_constraint
+--     WHERE conname = 'staff_shift_end_len7_chk'
+--       AND conrelid = 'staff'::regclass
+--   ) THEN
+--     ALTER TABLE staff
+--       ADD CONSTRAINT staff_shift_end_len7_chk
+--       CHECK (shift_end_local_time IS NULL OR array_length(shift_end_local_time, 1) = 7);
+--   END IF;
+-- END$$;
+
+-- -- Optional: set NULL default (app fills); or uncomment a 7-null default
+-- -- ALTER TABLE staff ALTER COLUMN shift_start_local_time SET DEFAULT ARRAY[
+-- --   NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time
+-- -- ];
+-- -- ALTER TABLE staff ALTER COLUMN shift_end_local_time SET DEFAULT ARRAY[
+-- --   NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time
+-- -- ];
+
+-- -- Optional: add column comments with index mapping (1..7 = Mon..Sun)
+-- COMMENT ON COLUMN staff.shift_start_local_time IS
+--   'Weekly shift starts as TIME[7], indexes 1..7 = Mon..Sun (local time).';
+-- COMMENT ON COLUMN staff.shift_end_local_time IS
+--   'Weekly shift ends   as TIME[7], indexes 1..7 = Mon..Sun (local time).';
+  
+-- -- ALTER TABLE staff
+-- -- ADD COLUMN IF NOT EXISTS documents TEXT[] DEFAULT '{}';
+
+-- -- 4) Add additional columns (idempotent)
+-- ALTER TABLE leave_requests
+--   ADD COLUMN IF NOT EXISTS note TEXT;
+
+-- ALTER TABLE leave_requests
+--   ADD COLUMN IF NOT EXISTS approved_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- ALTER TABLE leave_requests
+--   ADD COLUMN IF NOT EXISTS updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+
+
+-- Add created by, updated by and time on staff table
+
+/* === 1) contact_no: TEXT -> TEXT[] (preserve values) === */
+DO $$
+DECLARE
+  col_type text;
+BEGIN
+  SELECT data_type INTO col_type
+  FROM information_schema.columns
+  WHERE table_name='staff' AND column_name='contact_no';
+
+  -- If it's a plain TEXT column, convert it to TEXT[]
+  IF col_type = 'text' THEN
+    ALTER TABLE staff
+      ALTER COLUMN contact_no TYPE text[]
+      USING (
+        CASE
+          WHEN contact_no IS NULL OR contact_no = '' THEN ARRAY[]::text[]
+          ELSE ARRAY[contact_no]
+        END
+      );
+  END IF;
+  -- If it is already ARRAY, do nothing (idempotent).
+END$$;
+
+-- Optional: ensure it's either NULL or has at least one number
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'staff_contact_no_nonempty_chk'
+      AND conrelid = 'staff'::regclass
+  ) THEN
+    ALTER TABLE staff
+      ADD CONSTRAINT staff_contact_no_nonempty_chk
+      CHECK (contact_no IS NULL OR array_length(contact_no, 1) >= 1);
+  END IF;
+END$$;
+
+-- Helper to validate every element against an E.164-ish regex.
+-- Must be IMMUTABLE to be allowed inside a CHECK constraint.
+CREATE OR REPLACE FUNCTION all_e164(arr text[])
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  -- NULL or empty array is allowed; pair with the nonempty check above if you require at least one number.
+  SELECT arr IS NULL
+         OR NOT EXISTS (
+              SELECT 1
+              FROM unnest(arr) AS n
+              WHERE n IS NOT NULL
+                AND n <> ''
+                AND n !~ '^\+[1-9][0-9]{6,14}$'
+         );
+$$;
+
+-- Create the CHECK using the helper function, but don't validate existing rows yet.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'staff_contact_no_e164_chk'
+      AND conrelid = 'staff'::regclass
+  ) THEN
+    ALTER TABLE staff
+      ADD CONSTRAINT staff_contact_no_e164_chk
+      CHECK (all_e164(contact_no)) NOT VALID;
+  END IF;
+END$$;
+
+/* === 2) created_by / updated_by (FK → users.id) === */
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS updated_by UUID NULL REFERENCES users(id) ON DELETE SET NULL;
+
+-- Helpful indexes
+CREATE INDEX IF NOT EXISTS idx_staff_created_by ON staff(created_by);
+CREATE INDEX IF NOT EXISTS idx_staff_updated_by ON staff(updated_by);
+
+/* === 3) updated_at + trigger to auto-maintain === */
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE OR REPLACE FUNCTION set_staff_updated_at()
+RETURNS trigger AS $$
+BEGIN
+  NEW.updated_at := NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_staff_set_updated_at ON staff;
+CREATE TRIGGER trg_staff_set_updated_at
+BEFORE UPDATE ON staff
+FOR EACH ROW
+EXECUTE FUNCTION set_staff_updated_at();
+
+/* (Note) created_by/updated_by values should be set by your app layer:
+   - On INSERT: set created_by := current_user_id; optionally updated_by := created_by
+   - On UPDATE: set updated_by := current_user_id
+*/
+
+/* After cleaning existing data to match the regex, run:
+   ALTER TABLE staff VALIDATE CONSTRAINT staff_contact_no_e164_chk;
+*/

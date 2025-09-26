@@ -38,6 +38,13 @@ function setAccessCookie(res, token) {
   });
 }
 
+function getActorId(req) {
+  // Your auth middleware sets req.user from cookie/JWT (like in your attendance example)
+  const id = req?.user?.sub || req?.user?.id || req?.cookies?.userId || null;
+  if (!id) throw new Error("Missing acting user id (cookie)");
+  return id;
+}
+
 // POST /api/auth/register
 async function register(req, res) {
   const { username, password, role, isLogin, untime, createdBy } = req.body;
@@ -303,16 +310,13 @@ async function registerStaffAdmin(req, res) {
     password,
     isLogin,
     untime,
-    createdBy,
     firstName,
     lastName,
     email,
     contactNo,
     emergencyContactNo,
-    // NOW: arrays (or omitted)
     shiftStart,
     shiftEnd,
-
     birthday,
     joiningDate,
     leaveTaken,
@@ -324,6 +328,9 @@ async function registerStaffAdmin(req, res) {
 
   const client = await pool.connect();
   try {
+    // get actor from cookie-backed auth (req.user.* like your attendance example)
+    const actorId = getActorId(req);
+
     await client.query("BEGIN");
 
     const existing = await client.query(
@@ -335,7 +342,6 @@ async function registerStaffAdmin(req, res) {
       return res.status(409).json({ error: "Username already exists" });
     }
 
-    // Manager validation (if provided)
     if (managerId) {
       const r = await client.query("SELECT 1 FROM staff WHERE id=$1", [
         managerId,
@@ -348,16 +354,21 @@ async function registerStaffAdmin(req, res) {
       }
     }
 
-    // Coerce to arrays-of-7 (omit => 7×null, as you requested)
     const startWeek = Array.isArray(shiftStart)
       ? shiftStart
       : Array(7).fill(null);
     const endWeek = Array.isArray(shiftEnd) ? shiftEnd : Array(7).fill(null);
 
-    // Per-day validation: formats, pairing, inside global window
     await assertWeeklyShiftsWithinGlobal(startWeek, endWeek);
 
-    // Create user
+    // Normalize contactNo to array for TEXT[]
+    const contactArray = Array.isArray(contactNo)
+      ? contactNo.filter((v) => v !== undefined)
+      : contactNo
+      ? [contactNo]
+      : [];
+
+    // 1) Create user (stamp created_by = actorId)
     const userId = uuidv4();
     const passwordHash = await bcrypt.hash(password, 12);
 
@@ -371,34 +382,37 @@ async function registerStaffAdmin(req, res) {
         passwordHash,
         isLogin ?? false,
         untime ? JSON.stringify(untime) : null,
-        createdBy || null,
+        actorId, // created_by (from cookie)
       ]
     );
 
-    // Create staff (arrays!)
+    // 2) Create staff (contact_no as text[], stamp created_by & updated_by)
     const staffId = uuidv4();
     const { rows } = await client.query(
       `INSERT INTO staff (
          id, user_id, first_name, last_name, email, contact_no, emergency_contact_no,
          shift_start_local_time, shift_end_local_time,
-         birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family
+         birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family,
+         created_by, updated_by
        )
        VALUES (
-         $1,$2,$3,$4,$5,$6,$7,
+         $1,$2,$3,$4,$5,$6::text[],$7,
          $8::time[], $9::time[],
-         $10::date,$11::date,$12,$13,$14,$15,$16
+         $10::date,$11::date,$12,$13,$14,$15,$16,
+         $17,$18
        )
-       RETURNING employee_id, birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family`,
+       RETURNING employee_id, birthday, joining_date, leave_taken, total_leaves,
+                 position, manager_id, job_family, created_by, updated_by, created_at, updated_at`,
       [
         staffId,
         userId,
         firstName,
         lastName,
         email,
-        contactNo,
+        contactArray, // ::text[]
         emergencyContactNo,
-        startWeek,
-        endWeek,
+        startWeek, // ::time[]
+        endWeek, // ::time[]
         birthday ?? null,
         joiningDate ?? null,
         leaveTaken ?? 0,
@@ -406,6 +420,8 @@ async function registerStaffAdmin(req, res) {
         position ?? null,
         managerId ?? null,
         jobFamily ?? null,
+        actorId, // created_by
+        actorId, // updated_by (mirror on insert)
       ]
     );
 
@@ -421,7 +437,7 @@ async function registerStaffAdmin(req, res) {
         firstName,
         lastName,
         email,
-        contactNo,
+        contactNo: contactArray,
         emergencyContactNo,
         shiftStart: startWeek,
         shiftEnd: endWeek,
@@ -432,6 +448,10 @@ async function registerStaffAdmin(req, res) {
         position: ret.position,
         managerId: ret.manager_id,
         jobFamily: ret.job_family,
+        createdBy: ret.created_by,
+        updatedBy: ret.updated_by,
+        createdAt: ret.created_at,
+        updatedAt: ret.updated_at,
       },
     });
   } catch (err) {

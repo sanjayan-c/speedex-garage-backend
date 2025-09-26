@@ -1,6 +1,17 @@
 import Joi from "joi";
 const timeString = Joi.string().pattern(/^\d{2}:\d{2}(:\d{2})?$/);
 const isoDateOnly = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+const e164 = /^\+[1-9][0-9]{6,14}$/;
+
+const contactNoSchema = Joi.alternatives().try(
+  Joi.array()
+    .items(Joi.string().max(30).pattern(e164).allow("", null)) // DB check will reject non-E.164 non-empty values
+    .min(0),
+  Joi.string().max(30) // allow one number; we’ll wrap it in the service
+);
+
+// For emergency contact: only one number, required on create
+const emergencyContactNoSchema = Joi.string().max(30).pattern(e164).required();
 
 const registerSchema = Joi.object({
   username: Joi.string().min(3).max(64).required(),
@@ -43,8 +54,8 @@ const staffCreateSchema = Joi.object({
   firstName: Joi.string().max(100).required(),
   lastName: Joi.string().max(100).required(),
   email: Joi.string().email().required(),
-  contactNo: Joi.string().max(30).required(),
-  emergencyContactNo: Joi.string().max(30).required(),
+  contactNo: contactNoSchema.required(),
+  emergencyContactNo: Joi.string().pattern(e164).required(),
 
   // Required on create; if client omits, the service will store all-null,
   // but schema encourages sending explicit arrays.
@@ -63,8 +74,8 @@ const staffUpdateSchema = Joi.object({
   firstName: Joi.string().max(100).optional(),
   lastName: Joi.string().max(100).optional(),
   email: Joi.string().email().optional(),
-  contactNo: Joi.string().max(30).optional(),
-  emergencyContactNo: Joi.string().max(30).optional(),
+  contactNo: contactNoSchema.optional(),
+  emergencyContactNo: Joi.string().pattern(e164).optional(),
 
   shiftStart: weekTimeArray.optional(),
   shiftEnd: weekTimeArray.optional(),
@@ -106,13 +117,12 @@ const shiftUpdateSchema = Joi.object({
 const adminRegisterStaffSchema = Joi.object({
   username: Joi.string().min(3).max(64).required(),
   password: Joi.string().min(8).max(128).required(),
-  createdBy: Joi.string().uuid().optional(),
 
   firstName: Joi.string().max(100).required(),
   lastName: Joi.string().max(100).required(),
   email: Joi.string().email().required(),
-  contactNo: Joi.string().max(30).required(),
-  emergencyContactNo: Joi.string().max(30).required(),
+  contactNo: contactNoSchema.required(),
+  emergencyContactNo: Joi.string().pattern(e164).required(),
 
   // Arrays only (optional -> treated as 7×null by the handler)
   shiftStart: weekTimeArray.optional(),
@@ -127,7 +137,7 @@ const adminRegisterStaffSchema = Joi.object({
 })
   .with("shiftStart", "shiftEnd")
   .with("shiftEnd", "shiftStart");
-  
+
 const untimeStartSchema = Joi.object({
   userId: Joi.string().uuid().required(),
   durationMinutes: Joi.number().integer().min(1).optional(),
