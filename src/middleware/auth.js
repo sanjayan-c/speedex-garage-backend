@@ -8,7 +8,7 @@ export function auth(required = true) {
   return (req, res, next) => {
     // const authHeader = req.headers["authorization"];
     // let token = authHeader && authHeader.split(" ")[1];
-      const token = req.cookies.accessToken;
+      let token = req.cookies.accessToken;
       
     if (!token && req.cookies) {
       token = req.cookies[ACCESS_TOKEN_COOKIE];

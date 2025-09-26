@@ -5,6 +5,8 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import createError from "http-errors";
+import bodyParser from "body-parser";
+
 
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
@@ -17,6 +19,8 @@ import { startQrRotateJob } from "./jobs/qrRotateJob.js";
 import permissionsRouter from "./routes/permissions.js";
 const app = express();
 
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(helmet());
 app.use(morgan("dev"));
 app.use(express.json());

@@ -3,6 +3,34 @@ import { v4 as uuidv4 } from "uuid";
 import { pool } from "../utils/db.js";
 import bcrypt from "bcrypt";
 import { readGlobalShiftTime } from "../services/shifts.js";
+// src/services/staff.js
+import { uploadToDrive } from "../middleware/driveUpload.js"; // your Drive helper
+
+// Upload multiple staff documents
+async function uploadStaffDocuments(staffId, files) {
+  if (!files || !files.length) return [];
+
+  const uploadedFileIds = [];
+  for (const file of files) {
+    const fileId = await uploadToDrive(file.buffer, file.originalname, file.mimetype);
+    uploadedFileIds.push(fileId);
+  }
+
+  // Append uploaded documents to existing ones
+  const { rows } = await pool.query(
+    "UPDATE staff SET documents = COALESCE(documents, '{}') || $1 WHERE id=$2 RETURNING documents",
+    [uploadedFileIds, staffId]
+  );
+
+  return rows[0].documents;
+}
+
+// Fetch staff documents
+async function getStaffDocuments(staffId) {
+  const { rows } = await pool.query("SELECT documents FROM staff WHERE id=$1", [staffId]);
+  if (!rows.length) throw new Error("Staff not found");
+  return rows[0].documents;
+}
 
 /* --------------------- helpers --------------------- */
 
@@ -363,5 +391,7 @@ export {
   updateStaff,
   deleteStaff,
   assertStaffShiftWithinGlobal,
-  isStaffWindowInsideGlobal
+  isStaffWindowInsideGlobal,
+  getStaffDocuments,
+  uploadStaffDocuments
 };
