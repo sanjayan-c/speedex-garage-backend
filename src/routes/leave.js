@@ -9,6 +9,7 @@ import {
   getLeaveByStaff,
   deleteLeaveByStaff,
   deleteLeaveByAdmin,
+  requestLeaveCancellation,
 } from "../services/leave.js";
 
 const router = express.Router();
@@ -33,5 +34,8 @@ router.get("/me", auth(), requireRole("staff"), listMyLeave);
 
 router.patch("/me/:id", auth(), requireRole("staff"), editLeave);
 router.get("/staff/:staffId", auth(), requireRole("admin"), getLeaveByStaff);
+
+router.patch("/:id/request-cancel", auth(), requireRole("staff"), requestLeaveCancellation);
+
 
 export default router;

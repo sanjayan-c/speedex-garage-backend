@@ -391,3 +391,16 @@ COMMENT ON COLUMN staff.shift_start_local_time IS
   'Weekly shift starts as TIME[7], indexes 1..7 = Mon..Sun (local time).';
 COMMENT ON COLUMN staff.shift_end_local_time IS
   'Weekly shift ends   as TIME[7], indexes 1..7 = Mon..Sun (local time).';
+  
+-- ALTER TABLE staff
+-- ADD COLUMN IF NOT EXISTS documents TEXT[] DEFAULT '{}';
+
+-- 4) Add additional columns (idempotent)
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS note TEXT;
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS approved_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
