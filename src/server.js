@@ -1,11 +1,12 @@
-import 'dotenv/config';
-import http from 'http';
-import app from './app.js';
-import { pool } from './utils/db.js';
+import "dotenv/config";
+import http from "http";
+import app from "./app.js";
+import { pool } from "./utils/db.js";
 import { scheduleShiftLogout } from "./jobs/shiftLogout.js";
 import { scheduleUntimeEnforcer } from "./jobs/untimeEnforcer.js";
 import { scheduleShiftAlert } from "./jobs/shiftAlert.js";
 import { attachSocketServer } from "./socket/index.js";
+import { scheduleUntimePreAlert } from "./jobs/untimePreAlert.js";
 
 const PORT = process.env.PORT || 8080;
 
@@ -26,6 +27,8 @@ server.listen(PORT, async () => {
     await scheduleShiftAlert();
     // Background untime enforcement
     scheduleUntimeEnforcer();
+    // Untime pre alert enforcement
+    scheduleUntimePreAlert();
   } catch (err) {
     console.error("DB connection failed:", err);
     process.exit(1);
