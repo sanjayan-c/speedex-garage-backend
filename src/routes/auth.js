@@ -24,7 +24,7 @@ import { auth, requireRole } from "../middleware/auth.js";
 const router = express.Router();
 
 // Register a plain user
-router.post("/register", validate(registerSchema), register);
+router.post("/register", auth(true), requireRole("admin"),validate(registerSchema), register);
 
 // Admin one-shot: create user(role=staff) + staff row
 router.post(

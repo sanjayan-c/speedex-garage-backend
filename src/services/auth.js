@@ -64,7 +64,7 @@ async function register(req, res) {
         role,
         isLogin ?? false,
         untime ? JSON.stringify(untime) : null,
-        createdBy || null,
+        req?.user?.sub || req?.user?.id
       ]
     );
 
