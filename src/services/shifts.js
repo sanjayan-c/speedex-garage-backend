@@ -7,6 +7,7 @@ import { rescheduleShiftAlert } from "../jobs/shiftAlert.js";
 /* ---------------- helpers for time-window checks ---------------- */
 
 const timeRe = /^\d{2}:\d{2}(:\d{2})?$/;
+const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 
 function toMinutes(t) {
   const [h, m] = t.split(":").map(Number);
@@ -61,6 +62,18 @@ async function getShift(req, res) {
   }
 }
 
+// If pg gives "{09:00,10:00,,,...}" as text, coerce to (string|null)[]
+function coercePgTimeArray(val) {
+  if (val == null) return null;
+  if (Array.isArray(val)) return val;
+  if (typeof val === "string") {
+    const inner = val.replace(/^{|}$/g, "");
+    if (inner.trim() === "") return [];
+    return inner.split(",").map((s) => (s === "" ? null : s));
+  }
+  return null;
+}
+
 // PUT /api/shifts — update global hours; also allow margin/alert minutes
 async function updateShift(req, res) {
   const { start, end, marginTime, alertTime } = req.body || {};
@@ -72,54 +85,92 @@ async function updateShift(req, res) {
   }
 
   try {
-    // 1) Validate the new global window **against existing staff allocations** (still exact/no margin here)
+    // 1) Validate the new global window **against existing staff allocations (arrays)**
     const gStartMin = toMinutes(start);
     const gEndMin = toMinutes(end);
 
     const { rows: staffRows } = await pool.query(
       `SELECT
-         s.id AS staff_id,
+         s.id   AS staff_id,
          s.user_id,
          u.username,
-         s.shift_start_local_time::text AS shift_start,
-         s.shift_end_local_time::text   AS shift_end
+         s.shift_start_local_time AS start_week,  -- time[] or null
+         s.shift_end_local_time   AS end_week     -- time[] or null
        FROM staff s
        JOIN users u ON u.id = s.user_id
        WHERE s.shift_start_local_time IS NOT NULL
-         AND s.shift_end_local_time IS NOT NULL`
+          OR s.shift_end_local_time   IS NOT NULL`
     );
 
     const conflicts = [];
+
     for (const r of staffRows) {
-      const sStartMin = toMinutes(r.shift_start);
-      const sEndMin = toMinutes(r.shift_end);
-      const ok = isStaffWindowInsideGlobal(
-        gStartMin,
-        gEndMin,
-        sStartMin,
-        sEndMin
-      );
-      if (!ok) {
-        conflicts.push({
-          staffId: r.staff_id,
-          userId: r.user_id,
-          username: r.username,
-          shiftStart: r.shift_start,
-          shiftEnd: r.shift_end,
-        });
+      const startWeek = coercePgTimeArray(r.start_week) || [];
+      const endWeek = coercePgTimeArray(r.end_week) || [];
+
+      // Normalize to 7 slots
+      for (let i = 0; i < 7; i++) {
+        const s = startWeek[i] ?? null;
+        const e = endWeek[i] ?? null;
+
+        // Only validate a day if both start & end exist (your rule: if one is set, other must be too)
+        if (s != null && e != null) {
+          const sMin = toMinutes(s);
+          const eMin = toMinutes(e);
+
+          // Staff shift must be a forward window (no wrap) by your invariant
+          if (sMin >= eMin) {
+            conflicts.push({
+              staffId: r.staff_id,
+              userId: r.user_id,
+              username: r.username,
+              dayIndex: i,
+              day: DAY_NAMES[i],
+              shiftStart: s,
+              shiftEnd: e,
+              reason: "invalid-staff-window",
+            });
+            continue;
+          }
+
+          const ok = isStaffWindowInsideGlobal(gStartMin, gEndMin, sMin, eMin);
+          if (!ok) {
+            conflicts.push({
+              staffId: r.staff_id,
+              userId: r.user_id,
+              username: r.username,
+              dayIndex: i,
+              day: DAY_NAMES[i],
+              shiftStart: s,
+              shiftEnd: e,
+              reason: "outside-new-global",
+            });
+          }
+        } else if ((s == null) !== (e == null)) {
+          // One side present, the other null → this staff record is already invalid per your new rules
+          conflicts.push({
+            staffId: r.staff_id,
+            userId: r.user_id,
+            username: r.username,
+            dayIndex: i,
+            day: DAY_NAMES[i],
+            shiftStart: s,
+            shiftEnd: e,
+            reason: "unpaired-times",
+          });
+        }
       }
     }
 
     if (conflicts.length) {
       return res.status(400).json({
         error:
-          "Proposed global shift would conflict with existing staff shift allocations. Adjust staff shifts first, or choose a wider global window.",
+          "Proposed global shift conflicts with one or more staff daily windows. Fix staff shifts or widen the global window.",
         conflicts,
       });
     }
 
-    // 2) Build dynamic update for margin/alert (optional)
-    // If marginTime/alertTime are omitted, keep existing DB values.
+    // 2) Upsert new global + optional margin/alert
     const updateSql = `
       INSERT INTO shift_hours (id, start_local_time, end_local_time, margintime, alerttime)
       VALUES (1, $1::time, $2::time,
@@ -132,29 +183,30 @@ async function updateShift(req, res) {
         margintime       = COALESCE(EXCLUDED.margintime, shift_hours.margintime),
         alerttime        = COALESCE(EXCLUDED.alerttime,  shift_hours.alerttime),
         updated_at       = NOW()
-      RETURNING margintime, alerttime
+      RETURNING start_local_time::text AS start,
+                end_local_time::text   AS end,
+                margintime, alerttime, updated_at
     `;
 
     const { rows } = await pool.query(updateSql, [
       start,
       end,
-      // pass integers or null
       Number.isInteger(marginTime) ? marginTime : null,
       Number.isInteger(alertTime) ? alertTime : null,
     ]);
 
-    const effectiveMargin = Number(rows[0].margintime);
+    const row = rows[0];
+    const effectiveMargin = Number(row.margintime);
 
-    // 3) Reschedule cron to end + margin
-    // (Adjust your job signature as needed — passing minutes here)
+    // 3) Reschedule jobs (logout + alert) using the new settings
     await rescheduleShiftLogout({ marginMinutes: effectiveMargin });
     await rescheduleShiftLogout();
     await rescheduleShiftAlert();
-    
-    res.json({ ok: true });
+
+    return res.json({ ok: true, updated: row });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Failed to update shift hours" });
+    console.error("updateShift failed:", e);
+    return res.status(500).json({ error: "Failed to update shift hours" });
   }
 }
 

@@ -35,7 +35,7 @@ app.use(cors(corsOptions));
 // BEFORE other routes/middleware use
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 1000,
 });
 
 // Bypass rate limiter for socket.io transport requests
