@@ -9,7 +9,7 @@ import {
   verifyAccessToken,
 } from "../utils/jwt.js";
 import { enforceStaffUntimeWindow } from "../services/untime.js";
-import { assertStaffShiftWithinGlobal } from "../services/staff.js";
+import { assertWeeklyShiftsWithinGlobal } from "../services/staff.js";
 
 const COOKIE_NAME = process.env.COOKIE_NAME || "rt";
 const COOKIE_PATH = process.env.COOKIE_PATH || "/api/auth";
@@ -37,7 +37,6 @@ function setAccessCookie(res, token) {
     maxAge: 15 * 60 * 1000, // 15 minutes
   });
 }
-
 
 // POST /api/auth/register
 async function register(req, res) {
@@ -132,8 +131,6 @@ async function login(req, res) {
       role: user.role,
     });
 
-   
-
     const bcryptHash = await bcrypt.hash(refreshToken, 12);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
@@ -143,7 +140,7 @@ async function login(req, res) {
     );
     await pool.query("UPDATE users SET is_login=true WHERE id=$1", [user.id]);
 
-     setAccessCookie(res, accessToken);
+    setAccessCookie(res, accessToken);
     setRefreshCookie(res, refreshToken);
     res.json({
       accessToken,
@@ -197,8 +194,6 @@ async function refresh(req, res) {
       username: payload.username,
       role: payload.role,
     });
-
-
 
     const newHash = await bcrypt.hash(newRefresh, 12);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -314,10 +309,10 @@ async function registerStaffAdmin(req, res) {
     email,
     contactNo,
     emergencyContactNo,
+    // NOW: arrays (or omitted)
     shiftStart,
     shiftEnd,
 
-    // NEW:
     birthday,
     joiningDate,
     leaveTaken,
@@ -331,22 +326,38 @@ async function registerStaffAdmin(req, res) {
   try {
     await client.query("BEGIN");
 
-    const existing = await client.query("SELECT 1 FROM users WHERE username=$1", [username]);
+    const existing = await client.query(
+      "SELECT 1 FROM users WHERE username=$1",
+      [username]
+    );
     if (existing.rowCount) {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "Username already exists" });
     }
 
-    await assertStaffShiftWithinGlobal(shiftStart, shiftEnd);
-
+    // Manager validation (if provided)
     if (managerId) {
-      const r = await client.query("SELECT 1 FROM staff WHERE id=$1", [managerId]);
+      const r = await client.query("SELECT 1 FROM staff WHERE id=$1", [
+        managerId,
+      ]);
       if (!r.rowCount) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ error: "managerId must be an existing staff id" });
+        return res
+          .status(400)
+          .json({ error: "managerId must be an existing staff id" });
       }
     }
 
+    // Coerce to arrays-of-7 (omit => 7×null, as you requested)
+    const startWeek = Array.isArray(shiftStart)
+      ? shiftStart
+      : Array(7).fill(null);
+    const endWeek = Array.isArray(shiftEnd) ? shiftEnd : Array(7).fill(null);
+
+    // Per-day validation: formats, pairing, inside global window
+    await assertWeeklyShiftsWithinGlobal(startWeek, endWeek);
+
+    // Create user
     const userId = uuidv4();
     const passwordHash = await bcrypt.hash(password, 12);
 
@@ -364,6 +375,7 @@ async function registerStaffAdmin(req, res) {
       ]
     );
 
+    // Create staff (arrays!)
     const staffId = uuidv4();
     const { rows } = await client.query(
       `INSERT INTO staff (
@@ -373,7 +385,7 @@ async function registerStaffAdmin(req, res) {
        )
        VALUES (
          $1,$2,$3,$4,$5,$6,$7,
-         $8::time,$9::time,
+         $8::time[], $9::time[],
          $10::date,$11::date,$12,$13,$14,$15,$16
        )
        RETURNING employee_id, birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family`,
@@ -385,8 +397,8 @@ async function registerStaffAdmin(req, res) {
         email,
         contactNo,
         emergencyContactNo,
-        shiftStart,
-        shiftEnd,
+        startWeek,
+        endWeek,
         birthday ?? null,
         joiningDate ?? null,
         leaveTaken ?? 0,
@@ -411,8 +423,8 @@ async function registerStaffAdmin(req, res) {
         email,
         contactNo,
         emergencyContactNo,
-        shiftStart,
-        shiftEnd,
+        shiftStart: startWeek,
+        shiftEnd: endWeek,
         birthday: ret.birthday,
         joiningDate: ret.joining_date,
         leaveTaken: ret.leave_taken,
@@ -467,7 +479,6 @@ async function setUserBlockedStatus(req, res) {
   }
 }
 
-
 async function getCurrentUser(req, res) {
   try {
     const token = req.cookies?.accessToken;
@@ -485,23 +496,23 @@ async function getCurrentUser(req, res) {
       return res.status(403).json({ error: "User is blocked" });
     }
 
-    res.json({ user: { id: rows[0].id, username: rows[0].username, role: rows[0].role } });
+    res.json({
+      user: { id: rows[0].id, username: rows[0].username, role: rows[0].role },
+    });
   } catch (err) {
     console.error(err);
     res.status(401).json({ error: "Invalid or expired token" });
   }
 }
 
-
 // GET /api/users/me/allowed
 async function getUserAllowedStatus(req, res) {
   try {
     const userId = req.user.sub || req.user.id;
 
-    const { rows } = await pool.query(
-      "SELECT allowed FROM users WHERE id=$1",
-      [userId]
-    );
+    const { rows } = await pool.query("SELECT allowed FROM users WHERE id=$1", [
+      userId,
+    ]);
 
     if (!rows.length) {
       return res.status(404).json({ error: "User not found" });
@@ -514,5 +525,15 @@ async function getUserAllowedStatus(req, res) {
   }
 }
 
-
-export { register, getUserAllowedStatus, login, refresh,getCurrentUser, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin, setUserBlockedStatus };
+export {
+  register,
+  getUserAllowedStatus,
+  login,
+  refresh,
+  getCurrentUser,
+  logout,
+  logoutAllUsers,
+  logoutAllStaff,
+  registerStaffAdmin,
+  setUserBlockedStatus,
+};

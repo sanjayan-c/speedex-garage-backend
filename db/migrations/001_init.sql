@@ -314,3 +314,80 @@
 
 ALTER TABLE staff
 ADD COLUMN IF NOT EXISTS documents TEXT[] DEFAULT '{}';
+
+
+-- === Convert single TIME columns → TIME[] with 7 elements (Mon..Sun) ===
+DO $$
+DECLARE
+  start_udt text;
+  end_udt   text;
+BEGIN
+  -- Detect current types
+  SELECT data_type INTO start_udt
+  FROM information_schema.columns
+  WHERE table_name = 'staff' AND column_name = 'shift_start_local_time';
+
+  SELECT data_type INTO end_udt
+  FROM information_schema.columns
+  WHERE table_name = 'staff' AND column_name = 'shift_end_local_time';
+
+  -- If start is scalar TIME, convert to TIME[]
+  IF start_udt = 'time without time zone' THEN
+    ALTER TABLE staff
+      ALTER COLUMN shift_start_local_time TYPE time[] USING (
+        CASE
+          WHEN shift_start_local_time IS NULL THEN ARRAY[]::time[]
+          ELSE array_fill(shift_start_local_time, ARRAY[7])
+        END
+      );
+  END IF;
+
+  -- If end is scalar TIME, convert to TIME[]
+  IF end_udt = 'time without time zone' THEN
+    ALTER TABLE staff
+      ALTER COLUMN shift_end_local_time TYPE time[] USING (
+        CASE
+          WHEN shift_end_local_time IS NULL THEN ARRAY[]::time[]
+          ELSE array_fill(shift_end_local_time, ARRAY[7])
+        END
+      );
+  END IF;
+END$$;
+
+-- === Ensure arrays have exactly 7 elements (or are NULL) ===
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'staff_shift_start_len7_chk'
+      AND conrelid = 'staff'::regclass
+  ) THEN
+    ALTER TABLE staff
+      ADD CONSTRAINT staff_shift_start_len7_chk
+      CHECK (shift_start_local_time IS NULL OR array_length(shift_start_local_time, 1) = 7);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'staff_shift_end_len7_chk'
+      AND conrelid = 'staff'::regclass
+  ) THEN
+    ALTER TABLE staff
+      ADD CONSTRAINT staff_shift_end_len7_chk
+      CHECK (shift_end_local_time IS NULL OR array_length(shift_end_local_time, 1) = 7);
+  END IF;
+END$$;
+
+-- Optional: set NULL default (app fills); or uncomment a 7-null default
+-- ALTER TABLE staff ALTER COLUMN shift_start_local_time SET DEFAULT ARRAY[
+--   NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time
+-- ];
+-- ALTER TABLE staff ALTER COLUMN shift_end_local_time SET DEFAULT ARRAY[
+--   NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time,NULL::time
+-- ];
+
+-- Optional: add column comments with index mapping (1..7 = Mon..Sun)
+COMMENT ON COLUMN staff.shift_start_local_time IS
+  'Weekly shift starts as TIME[7], indexes 1..7 = Mon..Sun (local time).';
+COMMENT ON COLUMN staff.shift_end_local_time IS
+  'Weekly shift ends   as TIME[7], indexes 1..7 = Mon..Sun (local time).';

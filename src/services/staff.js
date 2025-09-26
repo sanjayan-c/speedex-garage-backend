@@ -12,7 +12,11 @@ async function uploadStaffDocuments(staffId, files) {
 
   const uploadedFileIds = [];
   for (const file of files) {
-    const fileId = await uploadToDrive(file.buffer, file.originalname, file.mimetype);
+    const fileId = await uploadToDrive(
+      file.buffer,
+      file.originalname,
+      file.mimetype
+    );
     uploadedFileIds.push(fileId);
   }
 
@@ -27,7 +31,9 @@ async function uploadStaffDocuments(staffId, files) {
 
 // Fetch staff documents
 async function getStaffDocuments(staffId) {
-  const { rows } = await pool.query("SELECT documents FROM staff WHERE id=$1", [staffId]);
+  const { rows } = await pool.query("SELECT documents FROM staff WHERE id=$1", [
+    staffId,
+  ]);
   if (!rows.length) throw new Error("Staff not found");
   return rows[0].documents;
 }
@@ -37,51 +43,75 @@ async function getStaffDocuments(staffId) {
 // Matches "HH:mm" or "HH:mm:ss"
 const timeRe = /^\d{2}:\d{2}(:\d{2})?$/;
 
-// Convert "HH:mm" or "HH:mm:ss" to minutes since midnight
 function toMinutes(t) {
-  const [h, m] = t.split(":").map(Number);
-  return h * 60 + (m ?? 0);
+  const [h, m, s] = t.split(":").map(Number);
+  return h * 60 + (m ?? 0) + (s ? s / 60 : 0);
 }
 
-// Return true if staff shift fits inside global window
 function isStaffWindowInsideGlobal(gStartMin, gEndMin, sStartMin, sEndMin) {
-  if (sStartMin >= sEndMin) return false; // staff shift itself must be forward (no wrap)
+  if (sStartMin >= sEndMin) return false;
 
-  // Global normal (e.g., 09:00–17:00)
   if (gEndMin >= gStartMin) {
     return sStartMin >= gStartMin && sEndMin <= gEndMin;
   }
-
-  // Global overnight (e.g., 22:00–06:00)
+  // overnight global window
   const inLateSegment = sStartMin >= gStartMin && sEndMin <= 1440;
   const inEarlySegment = sStartMin >= 0 && sEndMin <= gEndMin;
   return inLateSegment || inEarlySegment;
 }
 
-// Read the configured global shift window (wraps the shared reader; returns { start, end })
 async function readGlobalShiftTimes() {
   const { start, end } = await readGlobalShiftTime();
   return { start, end };
 }
 
-// Ensure staff shift sits inside the global window
-async function assertStaffShiftWithinGlobal(shiftStart, shiftEnd) {
-  if (!timeRe.test(shiftStart) || !timeRe.test(shiftEnd)) {
-    throw new Error("shiftStart/shiftEnd must be in HH:mm or HH:mm:ss format");
+/**
+ * Validate weekly arrays (length 7). Each index:
+ * - both null => OK (day off)
+ * - both present => format OK and inside global window
+ * - one null and one present => ERROR
+ */
+async function assertWeeklyShiftsWithinGlobal(startWeek, endWeek) {
+  if (
+    !Array.isArray(startWeek) ||
+    !Array.isArray(endWeek) ||
+    startWeek.length !== 7 ||
+    endWeek.length !== 7
+  ) {
+    throw new Error(
+      "shiftStart and shiftEnd must be arrays of length 7 (Mon..Sun)."
+    );
   }
 
-  const global = await readGlobalShiftTimes();
-  const gStartMin = toMinutes(global.start);
-  const gEndMin = toMinutes(global.end);
-  const sStartMin = toMinutes(shiftStart);
-  const sEndMin = toMinutes(shiftEnd);
+  const { start: gStart, end: gEnd } = await readGlobalShiftTimes();
+  const gStartMin = toMinutes(gStart);
+  const gEndMin = toMinutes(gEnd);
 
-  if (!isStaffWindowInsideGlobal(gStartMin, gEndMin, sStartMin, sEndMin)) {
-    const gStartDisp = global.start.slice(0, 5);
-    const gEndDisp = global.end.slice(0, 5);
-    throw new Error(
-      `Staff shift (${shiftStart}–${shiftEnd}) must be within global window ${gStartDisp}–${gEndDisp} (Toronto local time).`
-    );
+  for (let i = 0; i < 7; i++) {
+    const s = startWeek[i];
+    const e = endWeek[i];
+
+    if (s == null && e == null) continue; // day off
+    if ((s == null) !== (e == null)) {
+      throw new Error(
+        `Day ${i + 1}: start and end must both be provided or both be null.`
+      );
+    }
+    if (!timeRe.test(s) || !timeRe.test(e)) {
+      throw new Error(`Day ${i + 1}: times must be HH:mm or HH:mm:ss.`);
+    }
+
+    const sMin = toMinutes(s);
+    const eMin = toMinutes(e);
+    if (!isStaffWindowInsideGlobal(gStartMin, gEndMin, sMin, eMin)) {
+      const gStartDisp = gStart.slice(0, 5);
+      const gEndDisp = gEnd.slice(0, 5);
+      throw new Error(
+        `Day ${
+          i + 1
+        }: ${s}-${e} must be within global window ${gStartDisp}-${gEndDisp} (Toronto local time).`
+      );
+    }
   }
 }
 
@@ -96,9 +126,9 @@ async function createStaff(req, res) {
     email,
     contactNo,
     emergencyContactNo,
+    // must be arrays of length 7 (schema enforces)
     shiftStart,
     shiftEnd,
-    // NEW:
     birthday,
     joiningDate,
     leaveTaken,
@@ -109,31 +139,26 @@ async function createStaff(req, res) {
   } = req.body;
 
   try {
-    // shift validation (unchanged)
-    if ((shiftStart && !shiftEnd) || (!shiftStart && shiftEnd)) {
-      return res
-        .status(400)
-        .json({ error: "Provide both shiftStart and shiftEnd together." });
-    }
-    if (shiftStart && shiftEnd) {
-      await assertStaffShiftWithinGlobal(shiftStart, shiftEnd);
-    }
-
-    // Validate managerId (if provided)
     if (managerId) {
       const { rowCount } = await pool.query(
         "SELECT 1 FROM staff WHERE id = $1",
         [managerId]
       );
-      if (!rowCount) {
+      if (!rowCount)
         return res
           .status(400)
           .json({ error: "managerId must be an existing staff id" });
-      }
     }
 
+    // If client omitted either, take it as all-null (your request)
+    const startWeek = Array.isArray(shiftStart)
+      ? shiftStart
+      : Array(7).fill(null);
+    const endWeek = Array.isArray(shiftEnd) ? shiftEnd : Array(7).fill(null);
+
+    await assertWeeklyShiftsWithinGlobal(startWeek, endWeek);
+
     const id = uuidv4();
-    // employee_id is generated by DB default; use RETURNING to get it
     const { rows } = await pool.query(
       `INSERT INTO staff (
          id, user_id, first_name, last_name, email, contact_no, emergency_contact_no,
@@ -142,8 +167,8 @@ async function createStaff(req, res) {
        )
        VALUES (
          $1,$2,$3,$4,$5,$6,$7,
-         $8::time,$9::time,
-         $10::date,$11::date,$12,$13,$14,$15,$16
+         $8::time[], $9::time[],
+         $10::date, $11::date, $12, $13, $14, $15, $16
        )
        RETURNING employee_id, birthday, joining_date, leave_taken, total_leaves, position, manager_id, job_family`,
       [
@@ -154,8 +179,8 @@ async function createStaff(req, res) {
         email,
         contactNo,
         emergencyContactNo,
-        shiftStart ?? null,
-        shiftEnd ?? null,
+        startWeek,
+        endWeek,
         birthday ?? null,
         joiningDate ?? null,
         leaveTaken ?? 0,
@@ -167,7 +192,6 @@ async function createStaff(req, res) {
     );
 
     const ret = rows[0];
-
     res.status(201).json({
       id,
       userId,
@@ -177,8 +201,8 @@ async function createStaff(req, res) {
       email,
       contactNo,
       emergencyContactNo,
-      shiftStart: shiftStart ?? null,
-      shiftEnd: shiftEnd ?? null,
+      shiftStart: startWeek,
+      shiftEnd: endWeek,
       birthday: ret.birthday,
       joiningDate: ret.joining_date,
       leaveTaken: ret.leave_taken,
@@ -188,11 +212,10 @@ async function createStaff(req, res) {
       jobFamily: ret.job_family,
     });
   } catch (err) {
-    if (err.code === "23505") {
+    if (err.code === "23505")
       return res
         .status(409)
         .json({ error: "Email or EmployeeID must be unique" });
-    }
     console.error(err);
     res.status(500).json({ error: err.message || "Failed to create staff" });
   }
@@ -229,28 +252,27 @@ async function getStaffById(req, res) {
 async function updateStaff(req, res) {
   const updates = req.body;
 
-  const wantsShiftStart = Object.prototype.hasOwnProperty.call(updates, "shiftStart");
-  const wantsShiftEnd = Object.prototype.hasOwnProperty.call(updates, "shiftEnd");
-
   try {
-    if ((wantsShiftStart && !wantsShiftEnd) || (!wantsShiftStart && wantsShiftEnd)) {
-      return res.status(400).json({
-        error: "When updating shift times, provide both shiftStart and shiftEnd together.",
-      });
-    }
-    if (wantsShiftStart && wantsShiftEnd) {
-      await assertStaffShiftWithinGlobal(updates.shiftStart, updates.shiftEnd);
+    const hasStart = Object.prototype.hasOwnProperty.call(updates, "shiftStart");
+    const hasEnd   = Object.prototype.hasOwnProperty.call(updates, "shiftEnd");
+
+    let startWeek, endWeek;
+    if (hasStart || hasEnd) {
+      if (!(hasStart && hasEnd)) {
+        return res.status(400).json({
+          error: "Provide both shiftStart and shiftEnd (arrays of length 7).",
+        });
+      }
+      startWeek = updates.shiftStart;
+      endWeek   = updates.shiftEnd;
+      await assertWeeklyShiftsWithinGlobal(startWeek, endWeek);
     }
 
-    // Validate managerId if present
+    // managerId checks
     if (Object.prototype.hasOwnProperty.call(updates, "managerId")) {
       if (updates.managerId) {
-        const { rowCount } = await pool.query("SELECT 1 FROM staff WHERE id=$1", [
-          updates.managerId,
-        ]);
-        if (!rowCount) {
-          return res.status(400).json({ error: "managerId must be an existing staff id" });
-        }
+        const { rowCount } = await pool.query("SELECT 1 FROM staff WHERE id=$1", [updates.managerId]);
+        if (!rowCount) return res.status(400).json({ error: "managerId must be an existing staff id" });
         if (updates.managerId === req.params.id) {
           return res.status(400).json({ error: "A staff member cannot be their own manager" });
         }
@@ -265,7 +287,6 @@ async function updateStaff(req, res) {
       emergencyContactNo: "emergency_contact_no",
       shiftStart: "shift_start_local_time",
       shiftEnd: "shift_end_local_time",
-      // NEW:
       birthday: "birthday",
       joiningDate: "joining_date",
       leaveTaken: "leave_taken",
@@ -273,7 +294,6 @@ async function updateStaff(req, res) {
       position: "position",
       managerId: "manager_id",
       jobFamily: "job_family",
-      // employeeId intentionally excluded
     };
 
     const fields = [];
@@ -283,9 +303,13 @@ async function updateStaff(req, res) {
     for (const [key, value] of Object.entries(updates)) {
       const col = columnMap[key];
       if (!col) continue;
-      if (key === "shiftStart" || key === "shiftEnd") {
-        fields.push(`${col}=$${idx++}::time`);
-        params.push(value ?? null);
+
+      if (key === "shiftStart") {
+        fields.push(`${col}=$${idx++}::time[]`);
+        params.push(startWeek);
+      } else if (key === "shiftEnd") {
+        fields.push(`${col}=$${idx++}::time[]`);
+        params.push(endWeek);
       } else if (key === "birthday" || key === "joiningDate") {
         fields.push(`${col}=$${idx++}::date`);
         params.push(value ?? null);
@@ -295,17 +319,12 @@ async function updateStaff(req, res) {
       }
     }
 
-    if (!fields.length) {
-      return res.status(400).json({ error: "No valid fields to update" });
-    }
+    if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
 
     params.push(req.params.id);
-
-    const { rowCount } = await pool.query(
-      `UPDATE staff SET ${fields.join(", ")} WHERE id=$${idx}`,
-      params
-    );
+    const { rowCount } = await pool.query(`UPDATE staff SET ${fields.join(", ")} WHERE id=$${idx}`, params);
     if (!rowCount) return res.status(404).json({ error: "Not found" });
+
     res.json({ ok: true });
   } catch (err) {
     if (err.code === "23505") return res.status(409).json({ error: "Email must be unique" });
@@ -313,7 +332,6 @@ async function updateStaff(req, res) {
     res.status(500).json({ error: err.message || "Failed to update staff" });
   }
 }
-
 
 // DELETE /api/staff/:id
 async function deleteStaff(req, res) {
@@ -390,8 +408,8 @@ export {
   getStaffBlocked,
   updateStaff,
   deleteStaff,
-  assertStaffShiftWithinGlobal,
   isStaffWindowInsideGlobal,
   getStaffDocuments,
-  uploadStaffDocuments
+  uploadStaffDocuments,
+  assertWeeklyShiftsWithinGlobal,
 };

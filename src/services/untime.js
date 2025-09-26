@@ -431,8 +431,19 @@ async function endMyUntimeNow(req, res) {
   }
 }
 
+function coercePgTimeArray(val) {
+  if (val == null) return null;
+  if (Array.isArray(val)) return val;
+  if (typeof val === "string") {
+    const inner = val.replace(/^{|}$/g, "");
+    if (inner.trim() === "") return [];
+    return inner.split(",").map((s) => (s === "" ? null : s));
+  }
+  return null;
+}
+
 async function getEffectiveShiftForUser(userId) {
-  // Read global once (used for fallback and margins)
+  // Read global (still used for margins if you want, but NOT for fallback)
   const { rows: gRows } = await pool.query(
     `SELECT
        start_local_time::text AS g_start,
@@ -452,30 +463,40 @@ async function getEffectiveShiftForUser(userId) {
       }
     : null;
 
-  // per-staff window (we still take margins from global)
+  // Per-staff weekly arrays (NO ::text)
   const { rows: sRows } = await pool.query(
     `SELECT
-       shift_start_local_time::text AS start_local_time,
-       shift_end_local_time::text   AS end_local_time
+       shift_start_local_time AS week_start,
+       shift_end_local_time   AS week_end
      FROM staff
      WHERE user_id=$1`,
     [userId]
   );
 
-  if (sRows.length && sRows[0].start_local_time && sRows[0].end_local_time) {
-    return {
-      ...sRows[0],
-      ...(globalCfg
-        ? {
-            margin_minutes: globalCfg.margin_minutes,
-            alert_minutes: globalCfg.alert_minutes,
-          }
-        : { margin_minutes: 30, alert_minutes: 10 }),
-    };
+  if (sRows.length) {
+    const weekStart = coercePgTimeArray(sRows[0].week_start) || [];
+    const weekEnd = coercePgTimeArray(sRows[0].week_end) || [];
+
+    const toronto = DateTime.now().setZone("America/Toronto");
+    const idx = toronto.weekday - 1; // 0..6 Mon..Sun
+
+    const todaysStart = weekStart[idx] ?? null;
+    const todaysEnd = weekEnd[idx] ?? null;
+
+    // If both present, use per-day; OTHERWISE return null (no fallback!)
+    if (todaysStart && todaysEnd) {
+      return {
+        start_local_time: todaysStart,
+        end_local_time: todaysEnd,
+        // keep margins from global config if you want; fallback constants otherwise
+        margin_minutes: globalCfg ? globalCfg.margin_minutes : 30,
+        alert_minutes: globalCfg ? globalCfg.alert_minutes : 10,
+      };
+    }
+    return null; // ← day off / undefined shift => NO fallback to global
   }
 
-  // global fallback (with margins)
-  return globalCfg;
+  return null; // no staff row => no shift
 }
 
 // Enforce shift/leave rules for staff and mark UnTime if outside
@@ -583,7 +604,41 @@ async function enforceStaffUntimeWindow(userId, username, role) {
 
   // C) outside shift window?
   const shift = await getEffectiveShiftForUser(userId);
-  if (!shift) return { skipped: true, reason: "no-shift" };
+  if (!shift || !shift.start_local_time || !shift.end_local_time) {
+    // Treat as outside window (and record UnTime) when there is no per-day shift
+    if (await ensureNotBlocked()) {
+      return { skipped: true, blocked: true, reason: "user-blocked" };
+    }
+    const nowIso = nowToronto().toISO();
+    await pool.query(
+      `UPDATE users
+       SET untime = jsonb_set(
+                      jsonb_set(
+                        jsonb_set(COALESCE(untime,'{}'::jsonb), '{active}', 'true'::jsonb, true),
+                        '{reason}', to_jsonb('outside-window'::text), true
+                      ),
+                      '{startTime}', to_jsonb($1::timestamptz::text), true
+                    ),
+           untime_approved = false,
+           allowed = true
+     WHERE id = $2`,
+      [nowIso, userId]
+    );
+    await pool.query(
+      `UPDATE users
+       SET untime = jsonb_set(untime, '{durationMinutes}', to_jsonb(10::int), true)
+     WHERE id = $1`,
+      [userId]
+    );
+    return {
+      outside: true,
+      reason: "outside-window",
+      nowTorontoISO: nowIso,
+      // no windowStart/End because there is no shift today
+      untimeActive: true,
+      untimeApproved: false,
+    };
+  }
 
   const margin = Number(shift.margin_minutes) || 30; // from DB
   const { windowStart, windowEnd } = buildShiftWindowToronto(shift, {

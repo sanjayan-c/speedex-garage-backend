@@ -21,7 +21,9 @@ async function getActiveSessionQr(req, res) {
 
     return res.json({
       dataUrl,
-      link: `${APP_URL}/attendance/mark?session=${encodeURIComponent(s.session_code)}`,
+      link: `${APP_URL}/attendance/mark?session=${encodeURIComponent(
+        s.session_code
+      )}`,
       createdAt: toToronto(s.created_at),
       expiresAt: toToronto(s.expires_at),
     });
@@ -117,36 +119,60 @@ async function timeoutAllStaff(req, res) {
   try {
     await client.query("BEGIN");
 
-    // Force OUT at end-of-shift (Toronto) for anyone still IN
+    // Postgres: EXTRACT(DOW) => 0=Sun..6=Sat. Our arrays are 1..7 = Mon..Sun.
+    // So day_idx = CASE dow WHEN 0 THEN 7 ELSE dow END
     const { rows } = await client.query(
       `
-      WITH g AS (
-        SELECT end_local_time
+      WITH
+      today AS (
+        SELECT
+          (NOW() AT TIME ZONE 'America/Toronto')::date AS tor_date,
+          EXTRACT(DOW FROM (NOW() AT TIME ZONE 'America/Toronto'))::int AS dow
+      ),
+      g AS (
+        SELECT end_local_time AS g_end
         FROM shift_hours
         WHERE id = 1
       ),
+      -- Pick today's per-day end time from the staff array (Mon..Sun = 1..7)
       upd AS (
         UPDATE attendance_records ar
         SET
           time_out = (
-            (ar.attendance_date + COALESCE(s.shift_end_local_time, g.end_local_time))::timestamp
-              AT TIME ZONE 'America/Toronto'
+            (
+              ar.attendance_date
+              + COALESCE(
+                  s.shift_end_local_time[
+                    CASE t.dow WHEN 0 THEN 7 ELSE t.dow END
+                  ],
+                  g.g_end
+                )
+            )::timestamp
+            AT TIME ZONE 'America/Toronto'
           ),
           is_forced_out = true
         FROM staff s
         CROSS JOIN g
+        CROSS JOIN today t
         WHERE
           ar.staff_id = s.id
-          AND ar.attendance_date = (NOW() AT TIME ZONE 'America/Toronto')::date
+          AND ar.attendance_date = (SELECT tor_date FROM today)
           AND ar.time_in IS NOT NULL
           AND ar.time_out IS NULL
+          -- don't attempt if both staff's per-day and global end are NULL
+          AND COALESCE(
+                s.shift_end_local_time[
+                  CASE t.dow WHEN 0 THEN 7 ELSE t.dow END
+                ],
+                g.g_end
+              ) IS NOT NULL
         RETURNING ar.staff_id
       )
       SELECT staff_id FROM upd;
       `
     );
 
-    const staffIds = rows.map(r => r.staff_id);
+    const staffIds = rows.map((r) => r.staff_id);
     const forcedCount = staffIds.length;
 
     if (forcedCount > 0) {
@@ -165,12 +191,7 @@ async function timeoutAllStaff(req, res) {
 
     await client.query("COMMIT");
 
-    // If used as an endpoint:
-    if (res) {
-      return res.json({ ok: true, forced: forcedCount });
-    }
-
-    // If used from cron:
+    if (res) return res.json({ ok: true, forced: forcedCount });
     console.log(`[force-timeout] Forced OUT for ${forcedCount} staff`);
     return { forced: forcedCount };
   } catch (e) {
@@ -200,7 +221,8 @@ async function appendUntimeSessionForUser(userId, u) {
 
   // Parse start (we store timestamptz strings)
   let start = DateTime.fromISO(String(u.startTime), { setZone: true });
-  if (!start.isValid) start = DateTime.fromSQL(String(u.startTime), { setZone: true });
+  if (!start.isValid)
+    start = DateTime.fromSQL(String(u.startTime), { setZone: true });
   if (!start.isValid) return;
 
   // Use "now" as the end time, in the same zone as start
@@ -229,9 +251,9 @@ async function appendUntimeSessionForUser(userId, u) {
       staffId,
       attendanceDate,
       JSON.stringify({
-        start: start.toISO(),         // keep zoned ISO
-        end: end.toISO(),             // now, same zone as start
-        reason: u.reason ?? null,     // optional
+        start: start.toISO(), // keep zoned ISO
+        end: end.toISO(), // now, same zone as start
+        reason: u.reason ?? null, // optional
       }),
     ]
   );
@@ -283,7 +305,6 @@ async function hasShiftEndedForToday(userId) {
 
   return { ended: false, record: rec };
 }
-
 
 // GET /api/attendance?date=YYYY-MM-DD (optional)
 // If date is not provided → return all
@@ -404,10 +425,16 @@ async function getStaffAttendanceSummary(req, res) {
 
     const totalUnTime = untimeSessions.reduce((a, s) => a + s.dur, 0);
     const untimeWeek = untimeSessions
-      .filter((s) => s.start >= DateTime.fromISO(startOfWeek, { zone: "America/Toronto" }))
+      .filter(
+        (s) =>
+          s.start >= DateTime.fromISO(startOfWeek, { zone: "America/Toronto" })
+      )
       .reduce((a, s) => a + s.dur, 0);
     const untimeMonth = untimeSessions
-      .filter((s) => s.start >= DateTime.fromISO(startOfMonth, { zone: "America/Toronto" }))
+      .filter(
+        (s) =>
+          s.start >= DateTime.fromISO(startOfMonth, { zone: "America/Toronto" })
+      )
       .reduce((a, s) => a + s.dur, 0);
 
     // Build summary
@@ -419,7 +446,9 @@ async function getStaffAttendanceSummary(req, res) {
         email: staff.email,
         contactNo: staff.contact_no,
         role: staff.position,
-        joinDate: staff.joining_date ? staff.joining_date.toISOString().split("T")[0] : null,
+        joinDate: staff.joining_date
+          ? staff.joining_date.toISOString().split("T")[0]
+          : null,
       },
       worked: {
         totalHours: +(workedQ.rows[0].total_seconds || 0) / 3600,
@@ -436,10 +465,11 @@ async function getStaffAttendanceSummary(req, res) {
     return res.json(summary);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: "Failed to fetch attendance summary" });
+    return res
+      .status(500)
+      .json({ error: "Failed to fetch attendance summary" });
   }
 }
-
 
 async function getStaffAttendanceDetails(req, res) {
   const { staffId } = req.params;
@@ -447,12 +477,13 @@ async function getStaffAttendanceDetails(req, res) {
 
   try {
     // Fetch staff details
-   const staffQ = await pool.query(
+    const staffQ = await pool.query(
       `SELECT id, first_name, last_name, position, joining_date, email, contact_no
        FROM staff WHERE id=$1`,
       [staffId]
     );
-    if (!staffQ.rows.length) return res.status(404).json({ error: "Staff not found" });
+    if (!staffQ.rows.length)
+      return res.status(404).json({ error: "Staff not found" });
 
     const staff = staffQ.rows[0];
 
@@ -461,7 +492,9 @@ async function getStaffAttendanceDetails(req, res) {
     const params = [staffId];
 
     if (filterType && filterValue) {
-      const targetDate = DateTime.fromISO(filterValue, { zone: "America/Toronto" });
+      const targetDate = DateTime.fromISO(filterValue, {
+        zone: "America/Toronto",
+      });
       if (filterType === "day") {
         whereClause += " AND ar.attendance_date = $2::date";
         params.push(targetDate.toISODate());
@@ -492,7 +525,8 @@ async function getStaffAttendanceDetails(req, res) {
       const timeIn = r.time_in ? new Date(r.time_in) : null;
       const timeOut = r.time_out ? new Date(r.time_out) : null;
 
-      const workedSeconds = timeIn && timeOut ? Math.max(0, (timeOut - timeIn) / 1000) : 0;
+      const workedSeconds =
+        timeIn && timeOut ? Math.max(0, (timeOut - timeIn) / 1000) : 0;
 
       const untimeSeconds = (r.untime_sessions || []).reduce((sum, u) => {
         const start = new Date(u.start);
@@ -511,15 +545,25 @@ async function getStaffAttendanceDetails(req, res) {
 
     // Summary
     const summary = {
-      worked: { totalHours: +records.reduce((sum, r) => sum + r.workedHours, 0).toFixed(3) },
-      untime: { totalHours: +records.reduce((sum, r) => sum + r.untimeHours, 0).toFixed(3) },
+      worked: {
+        totalHours: +records
+          .reduce((sum, r) => sum + r.workedHours, 0)
+          .toFixed(3),
+      },
+      untime: {
+        totalHours: +records
+          .reduce((sum, r) => sum + r.untimeHours, 0)
+          .toFixed(3),
+      },
       count: records.length,
     };
 
     return res.json({ staff, records, summary });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: "Failed to fetch attendance details" });
+    return res
+      .status(500)
+      .json({ error: "Failed to fetch attendance details" });
   }
 }
 
@@ -531,15 +575,24 @@ async function updateAttendanceRecord(req, res) {
   try {
     // Validate inputs
     if (!time_in && !time_out) {
-      return res.status(400).json({ error: "At least one of time_in or time_out must be provided" });
+      return res
+        .status(400)
+        .json({
+          error: "At least one of time_in or time_out must be provided",
+        });
     }
 
     const timeInDate = time_in ? new Date(time_in) : null;
     const timeOutDate = time_out ? new Date(time_out) : null;
 
     // Validate date format
-    if ((time_in && isNaN(timeInDate.getTime())) || (time_out && isNaN(timeOutDate.getTime()))) {
-      return res.status(400).json({ error: "Invalid date format. Provide a valid ISO string." });
+    if (
+      (time_in && isNaN(timeInDate.getTime())) ||
+      (time_out && isNaN(timeOutDate.getTime()))
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Invalid date format. Provide a valid ISO string." });
     }
 
     // Validate start/end relationship
@@ -588,11 +641,11 @@ async function updateAttendanceRecord(req, res) {
     });
   } catch (err) {
     console.error("updateAttendanceRecord failed:", err);
-    return res.status(500).json({ error: "Failed to update attendance record" });
+    return res
+      .status(500)
+      .json({ error: "Failed to update attendance record" });
   }
 }
-
-
 
 export {
   getActiveSessionQr,
@@ -604,5 +657,5 @@ export {
   getStaffAttendanceSummary,
   hasShiftEndedForToday,
   updateAttendanceRecord,
-  listAttendance
+  listAttendance,
 };
