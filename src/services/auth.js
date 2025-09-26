@@ -514,5 +514,24 @@ async function getUserAllowedStatus(req, res) {
   }
 }
 
+async function getUsernameById(req, res) {
+  const { id } = req.params; // user ID
 
-export { register, getUserAllowedStatus, login, refresh,getCurrentUser, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin, setUserBlockedStatus };
+  try {
+    const { rows } = await pool.query(
+      "SELECT username FROM users WHERE id=$1",
+      [id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({ userId: id, username: rows[0].username });
+  } catch (err) {
+    console.error("getUsernameById failed:", err);
+    res.status(500).json({ error: "Failed to fetch username" });
+  }
+}
+
+export { register, getUsernameById, getUserAllowedStatus, login, refresh,getCurrentUser, logout, logoutAllUsers, logoutAllStaff, registerStaffAdmin, setUserBlockedStatus };

@@ -16,7 +16,8 @@ import {
   registerStaffAdmin,
   setUserBlockedStatus,
   getCurrentUser,
-  getUserAllowedStatus
+  getUserAllowedStatus,
+  getUsernameById
 } from "../services/auth.js";
 import { auth, requireRole } from "../middleware/auth.js";
 
@@ -39,7 +40,7 @@ router.post("/login", validate(loginSchema), login);
 
 // Refresh
 router.post("/refresh", refresh);
-
+router.get("/users/:id/username", getUsernameById);
 // Logout
 router.post("/logout", logout);
 

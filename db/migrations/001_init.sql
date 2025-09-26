@@ -312,5 +312,15 @@
 --   ADD COLUMN IF NOT EXISTS allowed    BOOLEAN NOT NULL DEFAULT false,
 --   ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT false;
 
-ALTER TABLE staff
-ADD COLUMN IF NOT EXISTS documents TEXT[] DEFAULT '{}';
+-- ALTER TABLE staff
+-- ADD COLUMN IF NOT EXISTS documents TEXT[] DEFAULT '{}';
+
+-- 4) Add additional columns (idempotent)
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS note TEXT;
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS approved_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
