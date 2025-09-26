@@ -24,3 +24,10 @@ ALTER TABLE attendance_records
 -- Drop overtime fields if they exist
 ALTER TABLE attendance_records DROP COLUMN IF EXISTS overtime_in;
 ALTER TABLE attendance_records DROP COLUMN IF EXISTS overtime_out;
+
+
+ALTER TABLE attendance_records
+ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE attendance_records
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
