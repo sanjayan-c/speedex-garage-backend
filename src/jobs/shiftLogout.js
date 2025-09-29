@@ -3,6 +3,7 @@ import cron from "node-cron";
 import { pool } from "../utils/db.js";
 import { logoutAllStaff } from "../services/auth.js";
 import { timeoutAllStaff } from "../services/attendance.js";
+import { deleteAllInactiveQrSessions } from "../services/qrAttendance.js";
 
 /**
  * Read end_local_time and margintime from DB.
@@ -71,7 +72,12 @@ export async function scheduleShiftLogout({ marginMinutes } = {}) {
         // 2) Revoke tokens + flip flags, etc.
         await logoutAllStaff();
 
-        console.log(`[cron] Forced time_out + logged out all staff at end+margin (Toronto)`);
+        // 3) Purge ALL old QR sessions; only keep any active session
+        await deleteAllInactiveQrSessions();
+
+        console.log(
+          `[cron] Forced time_out + logged out all staff + purged inactive QR sessions at end+margin (Toronto)`
+        );
       } catch (e) {
         console.error("[cron] Logout/timeout job failed:", e);
       }
@@ -80,9 +86,9 @@ export async function scheduleShiftLogout({ marginMinutes } = {}) {
   );
 
   console.log(
-    `[cron] Scheduled logout daily at ${hour.toString().padStart(2, "0")}:${minute
+    `[cron] Scheduled logout daily at ${hour
       .toString()
-      .padStart(2, "0")} America/Toronto`
+      .padStart(2, "0")}:${minute.toString().padStart(2, "0")} America/Toronto`
   );
   currentTask.start();
 }

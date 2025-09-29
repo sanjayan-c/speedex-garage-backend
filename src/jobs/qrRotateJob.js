@@ -27,11 +27,14 @@
 
 
 import cron from "node-cron";
-import { createNewQrSession, getActiveSession } from "../services/qrAttendance.js";
+import { createNewQrSession, getActiveSession, deleteAllInactiveQrSessions } from "../services/qrAttendance.js";
 
 export function startQrRotateJob(ttlMinutes = 3) {
   (async () => {
     try {
+      // start clean: remove history but keep any active
+      await deleteAllInactiveQrSessions();
+      
       const active = await getActiveSession();
       if (!active) await createNewQrSession(null, ttlMinutes);
     } catch (e) {

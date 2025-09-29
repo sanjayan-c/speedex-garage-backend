@@ -36,6 +36,11 @@ export async function getActiveSession() {
   return rows[0] || null;
 }
 
+// Delete all inactive QR sessions.
+export async function deleteAllInactiveQrSessions() {
+  await pool.query("DELETE FROM qr_sessions WHERE active=false");
+}
+
 export async function generateQrDataURLForSession(sessionCode, appUrl) {
   const link = `${appUrl}?session=${encodeURIComponent(sessionCode)}`;
   return QRCode.toDataURL(link);
