@@ -20,7 +20,11 @@ export function auth(required = true) {
     }
 
     jwt.verify(token, process.env.JWT_ACCESS_SECRET, (err, user) => {
-      if (err) return res.status(401).json({ error: "Invalid or expired token" });
+      if (err) {
+        // ✅ in soft mode, ignore invalid/expired tokens and continue
+        if (!required) return next();
+        return res.status(401).json({ error: "Invalid or expired token" });
+      }
       req.user = user;
       next();
     });

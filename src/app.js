@@ -6,7 +6,8 @@ import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import createError from "http-errors";
 import bodyParser from "body-parser";
-
+import { auditMiddleware } from "./middleware/audit.js";
+import { auth } from "./middleware/auth.js";
 
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
@@ -31,6 +32,11 @@ const corsOptions = {
   credentials: true,
 };
 app.use(cors(corsOptions));
+
+
+// If you keep a global auth, it can stay here
+app.use(auth(false)); // optional/soft; your routers still do auth(true) where needed
+app.use(auditMiddleware());
 
 // BEFORE other routes/middleware use
 const limiter = rateLimit({

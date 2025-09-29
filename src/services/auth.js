@@ -10,6 +10,7 @@ import {
 } from "../utils/jwt.js";
 import { enforceStaffUntimeWindow } from "../services/untime.js";
 import { assertWeeklyShiftsWithinGlobal } from "../services/staff.js";
+import { logAudit } from "../utils/logger.js";
 
 const COOKIE_NAME = process.env.COOKIE_NAME || "rt";
 const COOKIE_PATH = process.env.COOKIE_PATH || "/api/auth";
@@ -71,7 +72,7 @@ async function register(req, res) {
         role,
         isLogin ?? false,
         untime ? JSON.stringify(untime) : null,
-        req?.user?.sub || req?.user?.id
+        req?.user?.sub || req?.user?.id,
       ]
     );
 
@@ -149,6 +150,15 @@ async function login(req, res) {
 
     setAccessCookie(res, accessToken);
     setRefreshCookie(res, refreshToken);
+
+    req.user = {
+      id: user.id,
+      sub: user.id,
+      username: user.username,
+      role: user.role,
+    };
+    logAudit("login", req, { role: user.role });
+    
     res.json({
       accessToken,
       user: { id: user.id, username: user.username, role: user.role },
@@ -223,6 +233,8 @@ async function logout(req, res) {
   const token = req.cookies[COOKIE_NAME];
   if (token) {
     try {
+      logAudit("auth.logout", req);
+
       const payload = verifyRefreshToken(token); // { sub, ... }
       // revoke only this user's refresh tokens
       await pool.query(
