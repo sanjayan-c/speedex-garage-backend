@@ -1,5 +1,5 @@
 import express from "express";
-import { auth, requireRole } from "../middleware/auth.js";
+import { auth, requireRole, requirePermission } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import {
   listPendingUntime,
@@ -19,13 +19,13 @@ import {
 const router = express.Router();
 
 // List pending (staff with untime.active=true and not approved)
-router.get("/pending", auth(true), requireRole("admin"), listPendingUntime);
+// router.get("/pending", auth(true), requireRole("admin"), listPendingUntime);
 
 // List all untime users
 router.get(
   "/untime",
   auth(),
-  requireRole("admin"),
+  requirePermission("Off-schedule-approval"),
   listUntimeUsers
 );
 
@@ -42,7 +42,7 @@ router.get(
 router.post(
   "/duration",
   auth(true),
-  requireRole("admin"),
+  requirePermission("Off-schedule-approval"),
   validate(untimeDurationSchema),
   updateUntimeDurationForStaff
 );
@@ -51,7 +51,7 @@ router.post(
 router.patch(
   "/status",
   auth(),
-  requireRole("admin"),
+  requirePermission("Off-schedule-approval"),
   setUntimeStatusForUser
 );
 
@@ -59,7 +59,7 @@ router.patch(
 router.patch(
   "/status/bulk-working",
   auth(),
-  requireRole("admin"),
+  requirePermission("Off-schedule-approval"),
   setUntimeStatusForAllWorkingNow
 );
 

@@ -513,3 +513,19 @@ EXECUTE FUNCTION set_staff_updated_at();
 /* After cleaning existing data to match the regex, run:
    ALTER TABLE staff VALIDATE CONSTRAINT staff_contact_no_e164_chk;
 */
+
+
+INSERT INTO permissions (name, description)
+VALUES 
+  ('approve-leave', 'Can approve or reject leave requests'),
+  ('active-session', 'Can get active attendance session'),
+  ('attendance-list', 'Can list attendance records'),
+  ('edit-attendance', 'Can edit attendance records'),
+  ('create-staff', 'Can create staff users'),
+  ('block-user', 'Can block or unblock users'),
+  ('delete-leave', 'Can delete leave requests'),
+  ('update-staff', 'Can update staff records'),
+  ('staff-list', 'Can list and view staff records'),
+  ('Off-schedule-approval', 'Can approve or reject off schedule requests'),
+  ('leave-list', 'Can list leave requests')
+ON CONFLICT DO NOTHING;

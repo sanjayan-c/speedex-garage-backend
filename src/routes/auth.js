@@ -17,20 +17,26 @@ import {
   setUserBlockedStatus,
   getCurrentUser,
   getUserAllowedStatus,
-  getUsernameById
+  getUsernameById,
 } from "../services/auth.js";
-import { auth, requireRole } from "../middleware/auth.js";
+import { auth, requireRole, requirePermission } from "../middleware/auth.js";
 
 const router = express.Router();
 
 // Register a plain user
-router.post("/register", auth(true), requireRole("admin"),validate(registerSchema), register);
+router.post(
+  "/register",
+  auth(true),
+  requireRole("admin"),
+  validate(registerSchema),
+  register
+);
 
 // Admin one-shot: create user(role=staff) + staff row
 router.post(
   "/register-staff",
   auth(true),
-  requireRole("admin"),
+  requirePermission("create-staff"),
   validate(adminRegisterStaffSchema),
   registerStaffAdmin
 );
@@ -40,22 +46,30 @@ router.post("/login", validate(loginSchema), login);
 
 // Refresh
 router.post("/refresh", refresh);
-router.get("/users/:id/username", getUsernameById);
+router.get("/users/:id/username", auth(true), getUsernameById);
 // Logout
-router.post("/logout", logout);
+router.post("/logout", auth(true), logout);
 
 // Force-logout everyone
-router.post("/force-logout", auth(true), requireRole("admin"), logoutAllUsers);
+// router.post("/force-logout", auth(true), requireRole("admin"), logoutAllUsers);
 
 // Staff-only force logout
-router.post(
-  "/force-logout-staff",
-  auth(true),
-  requireRole("admin"),
-  logoutAllStaff
-);
+// router.post(
+//   "/force-logout-staff",
+//   auth(true),
+//   requireRole("admin"),
+//   logoutAllStaff
+// );
+
 router.get("/me", getCurrentUser);
-router.patch("/:id/block", auth(), requireRole("admin"), setUserBlockedStatus);
+
+router.patch(
+  "/:id/block",
+  auth(),
+  requirePermission("block-user"),
+  setUserBlockedStatus
+);
+
 router.get("/me/allowed", auth(), getUserAllowedStatus);
 
 export default router;

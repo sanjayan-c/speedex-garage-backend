@@ -1,6 +1,6 @@
 // src/routes/staff.js
 import express from "express";
-import { auth, requireRole } from "../middleware/auth.js";
+import { auth, requireRole, requirePermission } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { staffCreateSchema, staffUpdateSchema } from "../validation/schemas.js";
 import { upload } from "../middleware/driveUpload.js";
@@ -19,41 +19,42 @@ import {
 const router = express.Router();
 
 // Create a new staff member (admin only)
-router.post(
-  "/",
-  auth(true),
-  requireRole("admin"),
-  validate(staffCreateSchema),
-  createStaff
-);
+// router.post(
+//   "/",
+//   auth(true),
+//   requireRole("admin"),
+//   validate(staffCreateSchema),
+//   createStaff
+// );
 
 // List all staff (admin only)
-router.get("/", auth(true), requireRole("admin"), listStaff);
+router.get("/", auth(true), requirePermission('staff-list'), listStaff);
 
 // Get one staff record by id (admin only)
-router.get("/:id", auth(true), requireRole("admin"), getStaffById);
+router.get("/:id", auth(true), requirePermission('staff-list'), getStaffById);
 
-router.get("/:id/blocked", auth(true), requireRole("admin"), getStaffBlocked);
+router.get("/:id/blocked", auth(true), requirePermission('staff-list'), getStaffBlocked);
 
 // Update a staff record (admin only)
 router.patch(
   "/:id",
   auth(true),
-  requireRole("admin"),
+  requirePermission('update-staff'),
   validate(staffUpdateSchema),
   updateStaff
 );
 
 // Delete a staff record (admin only)
-router.delete("/:id", auth(true), requireRole("admin"), deleteStaff);
-router.get("/:id/allowed", auth(true), requireRole("admin"), getStaffAllowed);
+// router.delete("/:id", auth(true), requireRole("admin"), deleteStaff);
+
+router.get("/:id/allowed", auth(true), requirePermission('staff-list'), getStaffAllowed);
 
 
 // Upload multiple documents
 router.post(
   "/:id/documents",
   upload.array("documents"), // 'documents' is the key in form-data
-  auth(true), requireRole("admin"),
+  auth(true), requirePermission("create-staff"),
   async (req, res) => {
     try {
       const staffId = req.params.id;
@@ -67,7 +68,7 @@ router.post(
 );
 
 // Get staff documents
-router.get("/:id/documents", auth(true), requireRole("admin"), async (req, res) => {
+router.get("/:id/documents", auth(true), requirePermission('staff-list'), async (req, res) => {
   try {
     const staffId = req.params.id;
     const docs = await getStaffDocuments(staffId);

@@ -44,6 +44,11 @@ export function requirePermission(permissionName) {
   return async (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
+    // ✅ Admins always have full access
+    if (req.user.role === "admin") {
+      return next();
+    }
+
     try {
       const { rows } = await pool.query(
         `SELECT 1

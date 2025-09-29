@@ -15,8 +15,32 @@ router.get("/", auth(), requireRole("admin"), async (req, res) => {
   }
 });
 
+router.get("/staff", auth(), requireRole("admin"), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT 
+         u.id,
+         u.username,
+         u.role,
+         COALESCE(json_agg(p.name) FILTER (WHERE p.id IS NOT NULL), '[]') AS permissions
+       FROM users u
+       LEFT JOIN user_permissions up ON u.id = up.user_id
+       LEFT JOIN permissions p ON up.permission_id = p.id
+       WHERE u.role = 'staff'
+       GROUP BY u.id
+       ORDER BY u.username`
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error("Failed to fetch staff with permissions:", err);
+    res.status(500).json({ error: "Failed to fetch staff with permissions" });
+  }
+});
+
+
 // List permissions of a specific user
-router.get("/user/:userId", auth(), requireRole("admin"), async (req, res) => {
+router.get("/user/:userId", auth(), async (req, res) => {
   const { userId } = req.params;
   try {
     const { rows } = await pool.query(
