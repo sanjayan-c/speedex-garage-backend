@@ -18,6 +18,8 @@ import attendanceRoutes from "./routes/attendance.js";
 import leave from "./routes/leave.js";
 import { startQrRotateJob } from "./jobs/qrRotateJob.js";
 import permissionsRouter from "./routes/permissions.js";
+import wfh from "./routes/wfh.js";
+
 const app = express();
 
 app.use(bodyParser.json());
@@ -64,7 +66,7 @@ app.use("/api/untime", untimeRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/leave", leave);
 app.use("/api/permissions", permissionsRouter);
-
+app.use("/api/wfh", wfh);
 // 404
 app.use((req, res, next) => next(createError(404, "Not Found")));
 
